@@ -1,2 +1,3 @@
 cmake-cache/*
 build/*
+*/__pycache__/**

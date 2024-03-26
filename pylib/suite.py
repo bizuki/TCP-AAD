@@ -1,0 +1,125 @@
+import os
+import pandas as pd
+import numpy as np
+from .configuration import SuiteConfig, Model 
+from .plots import create_throughput_plot
+
+def process_suite(
+    config: SuiteConfig
+):    
+    if config.loss_rate_dist:
+        for uplink in [True]:
+            print(f'processing {uplink=}')
+            for data_rate in range(1, 7, 2):
+                print(f'processing {uplink=}, {data_rate=}')
+
+                res = {}
+                for mdl in config.models:
+                    new_params = dict(tcpVariants=','.join([mdl.value]), uplink=uplink, dataRate=data_rate)
+                    print(f'{mdl} is processing with {data_rate=} and {uplink=}')
+                    throughput = collect_packet_loss_stats_dist(new_params)
+                    print(f'{mdl} is processed with {data_rate=} and {uplink=}')
+                    res[mdl] = throughput
+                
+                    with open(f'dist_{data_rate}.res', 'w') as f:
+                        f.write(f'{res}')
+
+                create_throughput_plot(config, res, uplink, data_rate)
+                print(f'processed {uplink=}, {data_rate=}')
+        print(f'processed {uplink=}')
+
+    if config.loss_rate_error:
+        for uplink in [True]:
+            print(f'processing {uplink=}')
+            for data_rate in range(1, 4, 2):
+                print(f'processing {uplink=}, {data_rate=}')
+
+                res = {}
+                for mdl in config.models:
+                    new_params = dict(tcpVariants=','.join([mdl.value] * 10), uplink=uplink, dataRate=data_rate)
+                    print(f'{mdl} is processing with {data_rate=} and {uplink=}')
+                    throughput = collect_packet_loss_stats_error(new_params)
+                    print(f'{mdl} is processed with {data_rate=} and {uplink=}')
+                    res[mdl] = throughput
+
+                with open(f'error_{data_rate}.res', 'w') as f:
+                    f.write(f'{res}')
+                
+                create_throughput_plot(config, res, uplink, data_rate)
+                print(f'processed {uplink=}, {data_rate=}')
+        print(f'processed {uplink=}')
+
+    if config.loss_rate_congestion:
+        for uplink in [True]:
+            print(f'processing {uplink=}')
+            for data_rate in range(1, 6, 2):
+                print(f'processing {uplink=}, {data_rate=}')
+
+                res = {}
+                for mdl in config.models:
+                    new_params = dict(tcpVariants=','.join([mdl.value] * 10), uplink=uplink, dataRate=data_rate)
+                    print(f'{mdl} is processing with {data_rate=} and {uplink=}')
+                    throughput = collect_packet_loss_stats_error(new_params)
+                    print(f'{mdl} is processed with {data_rate=} and {uplink=}')
+                    res[mdl] = throughput
+
+                with open(f'error_{data_rate}.res', 'w') as f:
+                    f.write(f'{res}')
+                
+                create_throughput_plot(config, res, uplink, data_rate)
+                print(f'processed {uplink=}, {data_rate=}')
+        print(f'processed {uplink=}')
+
+def run_once(
+    params: dict
+):
+    os.system(f'./ns3 run "scratch/cerl-exp/topology {_params_to_command_args(params)}"')
+
+
+def collect_packet_loss_stats_dist(params) -> list[tuple[int, float]]:
+    def run_once(params):
+        os.system(f'./ns3 run "scratch/cerl-exp/topology {_params_to_command_args(params)}"')
+        line = next(filter(lambda s: s.startswith('average from all:'), open('./topology-aggregated.throughput').readlines()))
+        return float(line.removeprefix('average from all: '))
+    
+    throughputs = []
+    for i in range(95, 106):
+        print(f'calculating for distance {i}m')
+        params.update(dict(distanceToAP=i, simulationTime=20))
+        throughputs.append((i, run_once(params)))
+    
+    return throughputs
+
+
+def collect_packet_loss_stats_error(params) -> list[tuple[int, float]]:
+    def run_once(params):
+        os.system(f'./ns3 run "scratch/cerl-exp/topology {_params_to_command_args(params)}"')
+        line = next(filter(lambda s: s.startswith('average from all:'), open('./topology-aggregated.throughput').readlines()))
+        return float(line.removeprefix('average from all: '))
+    
+    throughputs = []
+    for i in range(0, 11):
+        print(f'calculating for error rate {i}%')
+        params.update(dict(distanceToAP=1, simulationTime=20, errorRate=i / 100))
+        throughputs.append((i, run_once(params)))
+    
+    return throughputs
+
+
+def collect_packet_loss_stats_cong(params) -> list[tuple[int, float]]:
+    def run_once(params):
+        os.system(f'./ns3 run "scratch/cerl-exp/topology {_params_to_command_args(params)}"')
+        line = next(filter(lambda s: s.startswith('average from all:'), open('./topology-aggregated.throughput').readlines()))
+        return float(line.removeprefix('average from all: '))
+    
+    throughputs = []
+    for i in range(0, 10):
+        print(f'calculating for loss in {i} mbps')
+        params.update(dict(distanceToAP=1, simulationTime=20, lLost=i))
+        throughputs.append((i, run_once(params)))
+    
+    return throughputs
+
+
+def _params_to_command_args(params: dict):
+    return ' '.join([f'--{k}={v}' for k, v in params.items()])
