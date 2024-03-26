@@ -100,8 +100,8 @@ TcpClassicRecovery::EnterRecovery(Ptr<TcpSocketState> tcb,
                                   uint32_t deliveredBytes [[maybe_unused]])
 {
     NS_LOG_FUNCTION(this << tcb << dupAckCount << unAckDataCount);
-    tcb->m_cWnd = tcb->m_ssThresh;
-    tcb->m_cWndInfl = tcb->m_ssThresh + (dupAckCount * tcb->m_segmentSize);
+    tcb->m_cWndInfl = tcb->m_cWnd + (dupAckCount * tcb->m_segmentSize);
+    tcb->m_cWnd = tcb->m_cWndInfl;
 }
 
 void
@@ -109,6 +109,7 @@ TcpClassicRecovery::DoRecovery(Ptr<TcpSocketState> tcb, uint32_t deliveredBytes 
 {
     NS_LOG_FUNCTION(this << tcb << deliveredBytes);
     tcb->m_cWndInfl += tcb->m_segmentSize;
+    tcb->m_cWnd = tcb->m_cWndInfl;
 }
 
 void
@@ -121,6 +122,7 @@ TcpClassicRecovery::ExitRecovery(Ptr<TcpSocketState> tcb)
     // immediately before calling ExitRecovery(), so we just need to
     // reset the inflated cWnd trace variable
     tcb->m_cWndInfl = tcb->m_ssThresh.Get();
+    tcb->m_cWnd = tcb->m_ssThresh.Get();
 }
 
 std::string

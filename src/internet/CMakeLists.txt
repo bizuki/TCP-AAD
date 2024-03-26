@@ -86,6 +86,7 @@ set(source_files
     model/rtt-estimator.cc
     model/tcp-bbr.cc
     model/tcp-bic.cc
+    model/tcp-cerl.cc
     model/tcp-congestion-ops.cc
     model/tcp-cubic.cc
     model/tcp-dctcp.cc
@@ -212,6 +213,7 @@ set(header_files
     model/rtt-estimator.h
     model/tcp-bbr.h
     model/tcp-bic.h
+    model/tcp-cerl.h
     model/tcp-congestion-ops.h
     model/tcp-cubic.h
     model/tcp-dctcp.h

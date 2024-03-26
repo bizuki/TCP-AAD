@@ -198,6 +198,9 @@ class TcpCongestionOps : public Object
      * \return a pointer of the copied object
      */
     virtual Ptr<TcpCongestionOps> Fork() = 0;
+
+    virtual void EnterRecovery(Ptr<TcpSocketState> tcb);
+    virtual void ExitRecovery(Ptr<TcpSocketState> tcb);
 };
 
 /**

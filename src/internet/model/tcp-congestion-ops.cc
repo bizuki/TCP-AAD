@@ -87,6 +87,20 @@ TcpCongestionOps::CongControl(Ptr<TcpSocketState> tcb,
     NS_LOG_FUNCTION(this << tcb);
 }
 
+void
+TcpCongestionOps::ExitRecovery(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    tcb->m_cWnd = tcb->m_ssThresh.Get();
+}
+
+void
+TcpCongestionOps::EnterRecovery(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    tcb->m_cWnd = tcb->m_ssThresh.Get();
+}
+
 // RENO
 
 NS_OBJECT_ENSURE_REGISTERED(TcpNewReno);
