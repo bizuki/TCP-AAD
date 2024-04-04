@@ -82,8 +82,14 @@ def create_throughput_plot(config: SuiteConfig, stats: dict[Model, list[tuple[in
     for mdl, data in stats.items():
         new_plt.plot(*zip(*data), MODEL_TO_FMT[mdl], label=mdl.value)
 
-    new_plt.set_xlabel('Distance from AP (m)')
     new_plt.set_ylabel('Average throughput (Mbps)')
+    
+    if config.loss_rate_congestion:
+        new_plt.set_xlabel('Loss at L (Mbps)')
+    if config.loss_rate_dist:
+        new_plt.set_xlabel('Distance from AP (m)')
+    if config.loss_rate_error:
+        new_plt.set_xlabel('Loss at L (%)')
 
     new_plt.xaxis.get_major_locator().set_params(integer=True)
     uplink_info = 'uplink' if uplink else 'downlink'

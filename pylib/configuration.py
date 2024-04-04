@@ -12,6 +12,10 @@ class Model(Enum):
     CERL_PLUS = 'TcpCerlPlus'
     CERL_PLUS_X = 'TcpCerlX'
 
+    @staticmethod
+    def interesting():
+        return [Model.CUBIC, Model.BBR, Model.CERL_PLUS, Model.NEW_RENO, Model.CERL]
+
 
 class SuiteConfig(BaseModel):
     name: str

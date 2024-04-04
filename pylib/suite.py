@@ -15,7 +15,7 @@ def process_suite(
 
                 res = {}
                 for mdl in config.models:
-                    new_params = dict(tcpVariants=','.join([mdl.value]), uplink=uplink, dataRate=data_rate)
+                    new_params = dict(tcpVariant=mdl.value, nodes=10, uplink=uplink, dataRate=data_rate)
                     print(f'{mdl} is processing with {data_rate=} and {uplink=}')
                     throughput = collect_packet_loss_stats_dist(new_params)
                     print(f'{mdl} is processed with {data_rate=} and {uplink=}')
@@ -36,7 +36,7 @@ def process_suite(
 
                 res = {}
                 for mdl in config.models:
-                    new_params = dict(tcpVariants=','.join([mdl.value] * 10), uplink=uplink, dataRate=data_rate)
+                    new_params = dict(tcpVariant=mdl.value, nodes=10, uplink=uplink, dataRate=data_rate)
                     print(f'{mdl} is processing with {data_rate=} and {uplink=}')
                     throughput = collect_packet_loss_stats_error(new_params)
                     print(f'{mdl} is processed with {data_rate=} and {uplink=}')
@@ -57,7 +57,7 @@ def process_suite(
 
                 res = {}
                 for mdl in config.models:
-                    new_params = dict(tcpVariants=','.join([mdl.value] * 10), uplink=uplink, dataRate=data_rate)
+                    new_params = dict(tcpVariant=mdl.value, nodes=10, uplink=uplink, dataRate=data_rate)
                     print(f'{mdl} is processing with {data_rate=} and {uplink=}')
                     throughput = collect_packet_loss_stats_error(new_params)
                     print(f'{mdl} is processed with {data_rate=} and {uplink=}')
@@ -113,9 +113,9 @@ def collect_packet_loss_stats_cong(params) -> list[tuple[int, float]]:
         return float(line.removeprefix('average from all: '))
     
     throughputs = []
-    for i in range(0, 10):
+    for i in range(0, 11):
         print(f'calculating for loss in {i} mbps')
-        params.update(dict(distanceToAP=1, simulationTime=20, lLost=i))
+        params.update(dict(distanceToAP=1, simulationTime=30, lLost=i))
         throughputs.append((i, run_once(params)))
     
     return throughputs

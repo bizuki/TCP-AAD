@@ -44,12 +44,12 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, size_t index, Ptr<PacketSin
 int
 main(int argc, char* argv[])
 {
-    LogComponentEnable("TcpCerl", LOG_ALL);
-    LogComponentEnable("TcpCerl", LOG_PREFIX_ALL);
-    LogComponentEnable("TcpSocketBase", LOG_ALL);
-    LogComponentEnable("TcpSocketBase", LOG_PREFIX_ALL);
-    LogComponentEnable("TcpRecoveryOps", LOG_ALL);
-    LogComponentEnable("TcpRecoveryOps", LOG_PREFIX_ALL);
+    // LogComponentEnable("TcpCerl", LOG_ALL);
+    // LogComponentEnable("TcpCerl", LOG_PREFIX_ALL);
+    // LogComponentEnable("TcpSocketBase", LOG_ALL);
+    // LogComponentEnable("TcpSocketBase", LOG_PREFIX_ALL);
+    // LogComponentEnable("TcpRecoveryOps", LOG_ALL);
+    // LogComponentEnable("TcpRecoveryOps", LOG_PREFIX_ALL);
 
 
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
@@ -89,10 +89,10 @@ main(int argc, char* argv[])
                         "TypeId " << tcpVariant << " not found");
     Config::SetDefault("ns3::TcpL4Protocol::SocketType",
                     TypeIdValue(TypeId::LookupByName(tcpVariant)));
-    // if (tcpVariant == "ns3::TcpCerl" || tcpVariant == "ns3::TcpCerlPlus") 
-    // {
-    //     Config::SetDefault("ns3::TcpL4Protocol::RecoveryType", TypeIdValue(TypeId::LookupByName("ns3::TcpClassicRecovery")));
-    // }
+    if (tcpVariant == "ns3::TcpCerl" || tcpVariant == "ns3::TcpCerlPlus") 
+    {
+        Config::SetDefault("ns3::TcpL4Protocol::RecoveryType", TypeIdValue(TypeId::LookupByName("ns3::TcpClassicRecovery")));
+    }
 
     /* Configure TCP Options */
     Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(payloadSize));
