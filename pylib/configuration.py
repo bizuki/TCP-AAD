@@ -14,7 +14,7 @@ class Model(Enum):
 
     @staticmethod
     def interesting():
-        return [Model.CUBIC, Model.BBR, Model.CERL_PLUS, Model.NEW_RENO, Model.CERL]
+        return [Model.CERL_PLUS, Model.CERL_PLUS_X]
 
 
 class SuiteConfig(BaseModel):
@@ -22,6 +22,8 @@ class SuiteConfig(BaseModel):
     loss_rate_dist: bool = False
     loss_rate_error: bool = False
     loss_rate_congestion: bool = False
+    window_size: bool = False
+    window_size_adapt: bool = False
 
     models: list[Model]
 

@@ -90,6 +90,11 @@ def create_throughput_plot(config: SuiteConfig, stats: dict[Model, list[tuple[in
         new_plt.set_xlabel('Distance from AP (m)')
     if config.loss_rate_error:
         new_plt.set_xlabel('Loss at L (%)')
+    if config.window_size:
+        new_plt.set_xlabel('Window size of CerlPlusX (s)')
+    if config.window_size_adapt:
+        new_plt.set_xlabel('Window size of CerlPlusX (s)')
+        new_plt.set_ylabel('Max time to adapt (s)')
 
     new_plt.xaxis.get_major_locator().set_params(integer=True)
     uplink_info = 'uplink' if uplink else 'downlink'
@@ -100,6 +105,58 @@ def create_throughput_plot(config: SuiteConfig, stats: dict[Model, list[tuple[in
     _create_dir('./plots')
     _create_dir(f'./plots/{config.name}')
     fig.savefig(f'./plots/{config.name}/throughput_{uplink_info}_{data_rate}.png')
+
+
+def create_delay_plot(file: str):
+    lines = open(file, 'r').readlines()
+    sequences = {}
+
+    acks = []
+    data = []
+
+    for line in lines:
+        _, delay, seq, is_ack = map(float, line.split())
+        
+        if seq not in sequences:
+            sequences[seq] = len(sequences)
+        target = acks if is_ack else data
+        target.append((sequences[seq], delay))
+    
+
+    fig = plt.figure()
+    new_plt = fig.add_subplot()
+    new_plt.scatter(*zip(*acks), color=['blue'], label='ack', marker='x', s=20)  
+    new_plt.scatter(*zip(*data), color=['orange'], label='data', marker='+', s=20) 
+    print(f'{len(acks)=}, {len(data)=}')
+    new_plt.set_ybound(0, 100)
+    new_plt.set_xbound(0, len(sequences))
+
+    new_plt.legend()
+    fig.savefig(f'./delay-with-adw.png')
+
+
+def create_cmp_plot(file: str):
+    lines = open(file, 'r').readlines()
+
+    ts, delay, smoothed_delay, iat, cwnd = zip(*map(lambda line: tuple(map(float, line.split())), lines))
+    
+    df =pd.DataFrame(
+        data={
+            'ts': ts,
+            'delay': delay,
+            'smoothed_delay': smoothed_delay,
+            'iat': iat,
+            'cwnd': cwnd
+        }
+    )
+
+    fig = plt.figure()
+    new_plt = fig.add_subplot()
+    
+    df.plot(x='ts', y='iat', ax=new_plt)
+    df.plot(x='ts', y='cwnd', ax=new_plt, secondary_y=True)
+
+    fig.savefig(f'./cmp_iat.png')
 
 
 def _create_dir(path: str):

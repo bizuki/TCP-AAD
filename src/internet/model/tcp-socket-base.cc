@@ -38,6 +38,7 @@
 #include "tcp-congestion-ops.h"
 #include "tcp-header.h"
 #include "tcp-l4-protocol.h"
+#include "tcp-option-cwnd.h"
 #include "tcp-option-sack-permitted.h"
 #include "tcp-option-sack.h"
 #include "tcp-option-ts.h"
@@ -121,6 +122,11 @@ TcpSocketBase::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&TcpSocketBase::m_timestampEnabled),
                           MakeBooleanChecker())
+            .AddAttribute("CongestionWindowOption",
+                          "Enable or disable Congestion Window option",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&TcpSocketBase::m_congestionWindowEnabled),
+                          MakeBooleanChecker())
             .AddAttribute(
                 "MinRto",
                 "Minimum retransmit timeout value",
@@ -171,6 +177,26 @@ TcpSocketBase::GetTypeId()
                                           "On",
                                           TcpSocketState::AcceptOnly,
                                           "AcceptOnly"))
+            .AddAttribute("Lambda",
+                          "Lambda parameter from ADW algo ",
+                          DoubleValue(3),
+                          MakeDoubleAccessor(&TcpSocketBase::m_lambda),
+                          MakeDoubleChecker<uint32_t>(0))
+            .AddAttribute("Alpha",
+                          "Alpha parameter from ADW algo (used in smoothing function)",
+                          DoubleValue(0.75),
+                          MakeDoubleAccessor(&TcpSocketBase::m_alpha),
+                          MakeDoubleChecker<double>(0, 1))
+            .AddAttribute("Timeout",
+                          "Maximum timout of delayed ACK",
+                          DoubleValue(0.1),
+                          MakeDoubleAccessor(&TcpSocketBase::m_maxTimeout),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("DynamicDelayWindow",
+                          "Enable dynamic delay window",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&TcpSocketBase::m_dwndEnabled),
+                          MakeBooleanChecker())
             .AddTraceSource("RTO",
                             "Retransmission timeout",
                             MakeTraceSourceAccessor(&TcpSocketBase::m_rto),
@@ -327,6 +353,9 @@ TcpSocketBase::TcpSocketBase()
 TcpSocketBase::TcpSocketBase(const TcpSocketBase& sock)
     : TcpSocket(sock),
       // copy object::m_tid and socket::callbacks
+      m_lambda(sock.m_lambda),
+      m_alpha(sock.m_alpha),
+      m_dwndEnabled(sock.m_dwndEnabled),
       m_dupAckCount(sock.m_dupAckCount),
       m_delAckCount(0),
       m_delAckMaxCount(sock.m_delAckMaxCount),
@@ -363,6 +392,7 @@ TcpSocketBase::TcpSocketBase(const TcpSocketBase& sock)
       m_rcvWindShift(sock.m_rcvWindShift),
       m_sndWindShift(sock.m_sndWindShift),
       m_timestampEnabled(sock.m_timestampEnabled),
+      m_congestionWindowEnabled(sock.m_congestionWindowEnabled),
       m_timestampToEcho(sock.m_timestampToEcho),
       m_recover(sock.m_recover),
       m_recoverActive(sock.m_recoverActive),
@@ -1373,6 +1403,14 @@ TcpSocketBase::DoForwardUp(Ptr<Packet> packet, const Address& fromAddress, const
         {
             m_timestampEnabled = false;
         }
+        if (tcpHeader.HasOption(TcpOption::CWND) && m_congestionWindowEnabled)
+        {
+            ProcessOptionCongestionWindow(tcpHeader.GetOption(TcpOption::CWND));
+        }
+        else
+        {
+            m_congestionWindowEnabled = false;
+        }
 
         // Initialize cWnd and ssThresh
         m_tcb->m_cWnd = GetInitialCwnd() * GetSegSize();
@@ -1403,6 +1441,14 @@ TcpSocketBase::DoForwardUp(Ptr<Packet> packet, const Address& fromAddress, const
                 ProcessOptionTimestamp(tcpHeader.GetOption(TcpOption::TS),
                                        tcpHeader.GetSequenceNumber());
             }
+        }
+        if (tcpHeader.HasOption(TcpOption::CWND) && m_congestionWindowEnabled)
+        {
+            ProcessOptionCongestionWindow(tcpHeader.GetOption(TcpOption::CWND));
+        }
+        else
+        {
+            m_congestionWindowEnabled = false;
         }
 
         EstimateRtt(tcpHeader);
@@ -1584,6 +1630,8 @@ TcpSocketBase::IsTcpOptionEnabled(uint8_t kind) const
     case TcpOption::SACKPERMITTED:
     case TcpOption::SACK:
         return m_sackEnabled;
+    case TcpOption::CWND:
+        return m_congestionWindowEnabled;
     default:
         break;
     }
@@ -3528,6 +3576,19 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     NS_LOG_DEBUG("Data segment, seq=" << tcpHeader.GetSequenceNumber()
                                       << " pkt size=" << p->GetSize());
 
+    if (m_dwndEnabled && m_lastPacketTime != Time::Min())
+    {
+        m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
+        m_baseIat = std::min(m_iat, m_baseIat);
+
+        UpdateDelayWindow(GetTimeRatio());
+    }
+    else
+    {
+        m_dwnd = m_lambda * GetSegSize();
+    }
+    m_lastPacketTime = Simulator::Now();
+
     // Put into Rx buffer
     SequenceNumber32 expectedSeq = m_tcb->m_rxBuffer->NextRxSequence();
     if (!m_tcb->m_rxBuffer->Add(p, tcpHeader))
@@ -3570,6 +3631,9 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
         m_tcb->m_rxBuffer->NextRxSequence() > expectedSeq + p->GetSize())
     { // A gap exists in the buffer, or we filled a gap: Always ACK
         m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
+        // reset delay window
+        NS_LOG_DEBUG("out of order packet, reset dwnd to " << m_lambda);
+        m_dwnd = m_lambda * GetSegSize();
         if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
             m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
         {
@@ -3584,7 +3648,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     }
     else
     { // In-sequence packet: ACK if delayed ack count allows
-        if (++m_delAckCount >= m_delAckMaxCount)
+        if (++m_delAckCount >= DelayWindow())
         {
             m_delAckEvent.Cancel();
             m_delAckCount = 0;
@@ -3606,12 +3670,21 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
         else if (!m_delAckEvent.IsExpired())
         {
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+            if (m_dwndEnabled)
+            {
+                m_delAckEvent.Cancel();
+                m_delAckEvent =
+                    Simulator::Schedule(GetDelayTimeout(), &TcpSocketBase::DelAckTimeout, this);
+                NS_LOG_LOGIC(
+                    this << " scheduled delayed ACK at "
+                        << (Simulator::Now() + Simulator::GetDelayLeft(m_delAckEvent)).GetSeconds());
+            }
         }
         else if (m_delAckEvent.IsExpired())
         {
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
             m_delAckEvent =
-                Simulator::Schedule(m_delAckTimeout, &TcpSocketBase::DelAckTimeout, this);
+                Simulator::Schedule(GetDelayTimeout(), &TcpSocketBase::DelAckTimeout, this);
             NS_LOG_LOGIC(
                 this << " scheduled delayed ACK at "
                      << (Simulator::Now() + Simulator::GetDelayLeft(m_delAckEvent)).GetSeconds());
@@ -3859,6 +3932,9 @@ void
 TcpSocketBase::DelAckTimeout()
 {
     m_delAckCount = 0;
+    NS_LOG_DEBUG("AckTimeout");
+    m_dwnd = std::max(m_lambda, m_dwnd - (1 - GetTimeRatio()));
+
     m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
     if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
         m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
@@ -4202,6 +4278,13 @@ TcpSocketBase::AddOptions(TcpHeader& header)
     {
         AddOptionTimestamp(header);
     }
+
+    NS_LOG_INFO(m_node->GetId() << " cwnd_opt " << m_congestionWindowEnabled);
+
+    if (m_congestionWindowEnabled)
+    {
+        AddOptionCongestionWindow(header);
+    }
 }
 
 void
@@ -4359,6 +4442,19 @@ TcpSocketBase::ProcessOptionTimestamp(const Ptr<const TcpOption> option,
 }
 
 void
+TcpSocketBase::ProcessOptionCongestionWindow(const Ptr<const TcpOption> option)
+{
+    NS_LOG_FUNCTION(this << option);
+
+    Ptr<const TcpOptionCwnd> cwnd = DynamicCast<const TcpOptionCwnd>(option);
+
+    m_cwndDiff = ((int32_t)cwnd->GetCongestionWindow()) - m_tcb->m_rcvCwndValue;
+    m_tcb->m_rcvCwndValue = cwnd->GetCongestionWindow();
+
+    NS_LOG_INFO(m_node->GetId() << " Got CongestionWindow=" << cwnd->GetCongestionWindow());
+}
+
+void
 TcpSocketBase::AddOptionTimestamp(TcpHeader& header)
 {
     NS_LOG_FUNCTION(this << header);
@@ -4371,6 +4467,19 @@ TcpSocketBase::AddOptionTimestamp(TcpHeader& header)
     header.AppendOption(option);
     NS_LOG_INFO(m_node->GetId() << " Add option TS, ts=" << option->GetTimestamp()
                                 << " echo=" << m_timestampToEcho);
+}
+
+void
+TcpSocketBase::AddOptionCongestionWindow(TcpHeader& header)
+{
+    NS_LOG_FUNCTION(this << header);
+
+    Ptr<TcpOptionCwnd> option = CreateObject<TcpOptionCwnd>();
+
+    option->SetCongestionWindow(m_tcb->m_cWnd.Get());
+
+    header.AppendOption(option);
+    NS_LOG_INFO(m_node->GetId() << " Add option CWND, cwnd=" << option->GetCongestionWindow());
 }
 
 void
@@ -4672,6 +4781,70 @@ SequenceNumber32
 TcpSocketBase::GetHighRxAck() const
 {
     return m_highRxAckMark.Get();
+}
+
+double 
+TcpSocketBase::GetTimeRatio()
+{
+    double timeRatio;
+    
+    if (m_iat < m_lambda * m_baseIat)
+    {
+        timeRatio = (m_baseIat - m_iat) / m_baseIat;
+    }
+    else
+    {
+        timeRatio = 1 - m_lambda;
+    }
+    NS_LOG_DEBUG("Theta = "  << (timeRatio + (m_lambda - 1)) / m_lambda);
+
+    return (timeRatio + (m_lambda - 1)) / m_lambda;
+}
+
+double 
+TcpSocketBase::UpdateDelayWindow(double theta)
+{
+    NS_LOG_FUNCTION(this << theta);
+    double R = std::min(m_tcb->m_rcvCwndValue, static_cast<uint32_t>(AdvertisedWindowSize()));
+    
+    if (m_cwndDiff > 0) 
+    {
+        m_dwnd = std::min(m_dwnd + (1 - theta), R);
+    } 
+    else if (m_cwndDiff < 0) 
+    {
+        m_dwnd = m_lambda * GetSegSize();
+    }
+
+    NS_LOG_INFO("Delay window updated = " << m_dwnd << ", cwndDiff=" << m_cwndDiff << " recvCwnd=" << m_tcb->m_rcvCwndValue);
+
+    return m_dwnd;
+}
+
+Time 
+TcpSocketBase::GetDelayTimeout()
+{
+    NS_LOG_FUNCTION(this);
+    if (m_dwndEnabled)
+    {
+        double smoothedIat = m_alpha * m_baseIat + (1 - m_alpha) * m_iat;
+        return Seconds(std::min(m_lambda * smoothedIat, m_maxTimeout));
+    }
+
+    return m_delAckTimeout;
+}
+
+double
+TcpSocketBase::DelayWindow() const
+{
+    NS_LOG_FUNCTION(this);
+    if (m_dwndEnabled)
+    {
+        // std::cout << m_dwnd << ' ' << m_dwnd / GetSegSize() << std::endl;
+        return m_dwnd / GetSegSize();
+    }
+
+    return m_delAckMaxCount;
 }
 
 // RttHistory methods

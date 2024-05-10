@@ -70,6 +70,49 @@ def process_suite(
                 print(f'processed {uplink=}, {data_rate=}')
         print(f'processed {uplink=}')
 
+
+    if config.window_size:
+        for uplink in [True]:
+            print(f'processing {uplink=}')
+            for data_rate in range(1, 6, 2):
+                print(f'processing {uplink=}, {data_rate=}')
+
+                res = {}
+                for mdl in config.models:
+                    new_params = dict(tcpVariant=mdl.value, nodes=10, uplink=uplink, dataRate=data_rate)
+                    print(f'{mdl} is processing with {data_rate=} and {uplink=}')
+                    throughput = collect_window_size(new_params)
+                    print(f'{mdl} is processed with {data_rate=} and {uplink=}')
+                    res[mdl] = throughput
+
+                with open(f'error_{data_rate}.res', 'w') as f:
+                    f.write(f'{res}')
+                
+                create_throughput_plot(config, res, uplink, data_rate)
+                print(f'processed {uplink=}, {data_rate=}')
+        print(f'processed {uplink=}')
+
+    if config.window_size_adapt:
+        for uplink in [True]:
+            print(f'processing {uplink=}')
+            for data_rate in range(5, 6, 2):
+                print(f'processing {uplink=}, {data_rate=}')
+
+                res = {}
+                for mdl in config.models:
+                    new_params = dict(tcpVariant=mdl.value, dataRate=data_rate)
+                    print(f'{mdl} is processing with {data_rate=} and {uplink=}')
+                    throughput = collect_window_size_adapt(new_params)
+                    print(f'{mdl} is processed with {data_rate=} and {uplink=}')
+                    res[mdl] = throughput
+
+                with open(f'error_{data_rate}.res', 'w') as f:
+                    f.write(f'{res}')
+                
+                create_throughput_plot(config, res, uplink, data_rate)
+                print(f'processed {uplink=}, {data_rate=}')
+        print(f'processed {uplink=}')
+
 def run_once(
     params: dict
 ):
@@ -117,6 +160,36 @@ def collect_packet_loss_stats_cong(params) -> list[tuple[int, float]]:
         print(f'calculating for loss in {i} mbps')
         params.update(dict(distanceToAP=1, simulationTime=30, lLost=i))
         throughputs.append((i, run_once(params)))
+    
+    return throughputs
+
+
+def collect_window_size(params) -> list[tuple[int, float]]:
+    def run_once(params):
+        os.system(f'./ns3 run "scratch/cerl-exp/topology {_params_to_command_args(params)}"')
+        line = next(filter(lambda s: s.startswith('average from all:'), open('./topology-aggregated.throughput').readlines()))
+        return float(line.removeprefix('average from all: '))
+    
+    throughputs = []
+    for i in range(1, 15):
+        print(f'calculating for window size {i * 5}')
+        params.update(dict(distanceToAP=1, simulationTime=30, errorRate=.1, cerlWindow=i * 5))
+        throughputs.append((i * 5, run_once(params)))
+    
+    return throughputs
+
+
+def collect_window_size_adapt(params) -> list[tuple[int, float]]:
+    def run_once(params):
+        os.system(f'./ns3 run "scratch/delay-change {_params_to_command_args(params)}"')
+        line = next(filter(lambda s: s.startswith('max delay:'), open('./topology.throughput').readlines()))
+        return int(line.removeprefix('max delay: '))
+    
+    throughputs = []
+    for i in range(1, 15):
+        print(f'calculating for window size {i * 5}')
+        params.update(dict(delayAtOtherRoute=90, cerlWindow=i * 5))
+        throughputs.append((i * 5, run_once(params)))
     
     return throughputs
 

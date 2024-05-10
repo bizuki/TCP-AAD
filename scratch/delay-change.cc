@@ -18,18 +18,32 @@
 #include "ns3/yans-wifi-helper.h"
 #include "ns3/drop-tail-queue.h"
 #include "ns3/ptr.h"
+#include "ns3/stats-module.h"
+#include "ns3/rip-helper.h"
+#include "ns3/ipv4-static-routing-helper.h"
+#include "ns3/ipv4-list-routing-helper.h"
 
 NS_LOG_COMPONENT_DEFINE("wifi-tcp");
 
 using namespace ns3;
 
 std::map<Ipv4Address, size_t> adressToInterface;
+size_t dataRate = 5;
+uint64_t maxAdaptabilityTime = 0;
+uint64_t currentAdaptabilityTime = 0;
+double maxThroughput = 0;
+const auto EPS = 1e-2;
 
 /**
  * Calculate the throughput
  */
 void
-CalculateThroughput(Ptr<OutputStreamWrapper> stream, std::vector<Ptr<PacketSink>>& sinks, uint64_t lastTotalRx)
+CalculateThroughput(
+    Ptr<OutputStreamWrapper> stream, 
+    Ptr<GnuplotAggregator> aggregator,
+    const std::string& datasetContext,
+    std::vector<Ptr<PacketSink>>& sinks, 
+    uint64_t lastTotalRx)
 {
     Time now = Simulator::Now();
     uint64_t total = 0;
@@ -38,9 +52,21 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, std::vector<Ptr<PacketSink>
         total += sink->GetTotalRx();
     }
 
-    double cur = (total - lastTotalRx) * 8.0 / sinks.size();
-    *stream->GetStream() << now.GetSeconds() << "\t" << cur << '\t' << std::endl;
-    Simulator::Schedule(MilliSeconds(10), MakeBoundCallback(&CalculateThroughput, stream, sinks, total));
+    double cur = (total - lastTotalRx) * 8.0 / sinks.size() / (dataRate * 1024 * 1024);
+    if (cur < maxThroughput - EPS) {
+        currentAdaptabilityTime++;
+    } else {
+        maxAdaptabilityTime = std::max(maxAdaptabilityTime, currentAdaptabilityTime);
+        // *stream->GetStream() << now.GetSeconds() << ' ' << maxAdaptabilityTime << std::endl;
+        currentAdaptabilityTime = 0;
+    }
+
+    maxThroughput = std::min(std::max(cur, maxThroughput), 0.925391);
+
+    // *stream->GetStream()  << now.GetSeconds() << ' ' << cur << std::endl;
+
+    aggregator->Write2d(datasetContext, now.GetSeconds(), cur);
+    Simulator::Schedule(Seconds(1), MakeBoundCallback(&CalculateThroughput, stream, aggregator, datasetContext, sinks, total));
 }
 
 void 
@@ -62,14 +88,16 @@ DisableChannel(Ptr<Node> g1, Ipv4Address address)
 }
 
 void
-ChangeChannel(Ptr<Node> g1, Ipv4Address active, Ipv4Address sleeping)
+ChangeChannel(std::pair<Ptr<Node>, Ptr<Node>> nodes, std::pair<Ipv4Address, Ipv4Address> active, std::pair<Ipv4Address, Ipv4Address> sleeping)
 {
-    EnableChannel(g1, sleeping);
-    DisableChannel(g1, active);
+    DisableChannel(nodes.first, active.first);
+    DisableChannel(nodes.second, active.second);
+    EnableChannel(nodes.first, sleeping.first);
+    EnableChannel(nodes.second, sleeping.second);
 
-    Ipv4GlobalRoutingHelper::RecomputeRoutingTables();
+    // Ipv4GlobalRoutingHelper::RecomputeRoutingTables();
 
-    Simulator::Schedule(Seconds(200), MakeBoundCallback(&ChangeChannel, g1, sleeping, active));
+    Simulator::Schedule(Seconds(200), MakeBoundCallback(&ChangeChannel, nodes, sleeping, active));
 }
 
 
@@ -78,16 +106,19 @@ int
 main(int argc, char* argv[])
 {
     // LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG);
-    LogComponentEnable("TcpCerl", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("TcpCerl", LOG_LEVEL_DEBUG);
     // LogComponentEnableAll(LOG_LEVEL_DEBUG);
+    // LogComponentEnable("Rip", LOG_LEVEL_ALL);
 
     uint32_t payloadSize = 1472;
-    size_t dataRate = 20;
-    std::string tcpVariant{"TcpCerlPlus"};
+    std::string tcpVariant{"TcpCerlX"};
     size_t flows = 1;
-    size_t groups = 20;
+    size_t groups = 1;
     size_t groupRttIncrease = 6;
+    size_t delayAtOtherRoute = 0;
+    std::string bandwidthAtOtherRoute{"10Gbps"};
     double simulationTime = 900;
+    size_t cerlWindow = 60;
 
     /* Command line argument parser setup. */
     CommandLine cmd(__FILE__);
@@ -101,7 +132,12 @@ main(int argc, char* argv[])
     cmd.AddValue("groups", "Number of groups", groups);
     cmd.AddValue("flows", "Number of active flows in group", flows);
     cmd.AddValue("groupRttIncrease", "Increase of rtt between groups", groupRttIncrease);
+    cmd.AddValue("delayAtOtherRoute", "Delay at slow route", delayAtOtherRoute);
+    cmd.AddValue("bandwidthAtOtherRoute", "Bandwidth at slow route", bandwidthAtOtherRoute);
+    cmd.AddValue("cerlWindow", "Window size of CerlPlusX", cerlWindow);
     cmd.Parse(argc, argv);
+
+    Config::SetDefault ("ns3::Ipv4GlobalRouting::RespondToInterfaceEvents", BooleanValue (true));
 
     tcpVariant = std::string("ns3::") + tcpVariant;
 
@@ -111,7 +147,8 @@ main(int argc, char* argv[])
                         "TypeId " << tcpVariant << " not found");
     Config::SetDefault("ns3::TcpL4Protocol::SocketType",
                     TypeIdValue(TypeId::LookupByName(tcpVariant)));
-    if (tcpVariant == "ns3::TcpCerl" || tcpVariant == "ns3::TcpCerlPlus") 
+    Config::SetDefault("ns3::TcpCerlX::WindowSize", UintegerValue(cerlWindow));
+    if (tcpVariant == "ns3::TcpCerl" || tcpVariant == "ns3::TcpCerlPlus" || tcpVariant == "ns3::TcpCerlX") 
     {
         Config::SetDefault("ns3::TcpL4Protocol::RecoveryType", TypeIdValue(TypeId::LookupByName("ns3::TcpClassicRecovery")));
     }
@@ -125,6 +162,7 @@ main(int argc, char* argv[])
 
     /* Create nodes */
     NodeContainer networkNodes;
+
     networkNodes.Create(flows * groups * 2 + groups + 2);
     Ptr<Node> g1Node = networkNodes.Get(0);
     Ptr<Node> g2Node = networkNodes.Get(1);
@@ -148,8 +186,10 @@ main(int argc, char* argv[])
 
     NetDeviceContainer flowDevices;
     NetDeviceContainer sinkDevices;
-    NetDeviceContainer bottleneckToG1Devices;
-    NetDeviceContainer uselessDevices;
+
+    NetDeviceContainer flowConnections;
+    NetDeviceContainer sinkConnections;
+    NetDeviceContainer groupConnections;
 
     for (size_t i = 0; i < groups; i++) 
     {
@@ -161,8 +201,7 @@ main(int argc, char* argv[])
         groupConnector.Add(groupBottlenecks.Get(i));
     
         auto cont = pointToPoint.Install(groupConnector);
-        bottleneckToG1Devices.Add(cont.Get(1));
-        uselessDevices.Add(cont.Get(0));
+        groupConnections.Add(NetDeviceContainer(cont.Get(1), cont.Get(0)));
 
         for (size_t j = 0; j < flows; j++)
         {
@@ -174,7 +213,7 @@ main(int argc, char* argv[])
 
             auto cont = pointToPoint.Install(flowConnector);
             flowDevices.Add(cont.Get(1));
-            uselessDevices.Add(cont.Get(0));
+            flowConnections.Add(NetDeviceContainer(cont.Get(1), cont.Get(0)));
 
             pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate("10Gbps")));
             pointToPoint.SetChannelAttribute("Delay", StringValue("0ms"));
@@ -184,11 +223,13 @@ main(int argc, char* argv[])
 
             cont = pointToPoint.Install(sinkConnector);
             sinkDevices.Add(cont.Get(1));
-            uselessDevices.Add(cont.Get(0));
+            sinkConnections.Add(NetDeviceContainer(cont.Get(0), cont.Get(1)));
         }
     }
 
     Ptr<NetDevice> highRtt, lowRtt;
+
+    NetDeviceContainer G1ToG2;
 
     pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate(("10Gbps"))));
     pointToPoint.SetChannelAttribute("Delay", StringValue("0ms"));
@@ -199,12 +240,12 @@ main(int argc, char* argv[])
         p2pNodesChannel.Add(g2Node);
     
         NetDeviceContainer g1g2 = pointToPoint.Install(p2pNodesChannel);
-        uselessDevices.Add(g1g2.Get(1));
+        G1ToG2.Add(g1g2);
         lowRtt = g1g2.Get(0);
     }  
 
-    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate(("10Gbps"))));
-    pointToPoint.SetChannelAttribute("Delay", StringValue("90ms"));
+    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate((bandwidthAtOtherRoute))));
+    pointToPoint.SetChannelAttribute("Delay", StringValue(std::to_string(delayAtOtherRoute) + "ms"));
 
     {
         NodeContainer p2pNodesChannel;
@@ -212,37 +253,59 @@ main(int argc, char* argv[])
         p2pNodesChannel.Add(g2Node);
     
         NetDeviceContainer g1g2 = pointToPoint.Install(p2pNodesChannel);
-        uselessDevices.Add(g1g2.Get(1));
+        G1ToG2.Add(g1g2);
         highRtt = g1g2.Get(0);
     }
 
-    /* Internet stack */
-    InternetStackHelper stack;
-    stack.Install(networkNodes);
+    RipHelper rip;
+
+    Ipv4StaticRoutingHelper staticRouting;
+
+    Ipv4ListRoutingHelper list;
+    list.Add(rip, 0);
+
+    InternetStackHelper internet;
+    // internet.SetRoutingHelper(list);
+    // internet.Install(NodeContainer(g1Node, g2Node));
+    // InternetStackHelper internetRest;
+    internet.Install(NodeContainer(sinkNodes, flowNodes, groupBottlenecks, g1Node, g2Node));
 
     Ipv4AddressHelper address;
-    address.SetBase("10.1.0.0", "255.255.255.0");
-    Ipv4InterfaceContainer sinkInterfaces;
-    sinkInterfaces = address.Assign(sinkDevices);
-    address.SetBase("10.1.2.0", "255.255.255.0");
-    Ipv4InterfaceContainer flowInterfaces;
-    flowInterfaces = address.Assign(flowDevices);
+    std::vector<Ipv4Address> sinkAddresses;
+    Ipv4InterfaceContainer otherInterfaces;
+
+    for (size_t i = 0; i < groups; i++)
+    {
+        std::string tmp = "10." + std::to_string(i + 1) + ".0.0";
+        address.SetBase(tmp.c_str(), "255.255.255.0");
+        auto inter = address.Assign(NetDeviceContainer(groupConnections.Get(2 * i), groupConnections.Get(2 * i + 1)));
+        otherInterfaces.Add(inter);
+
+        for (size_t j = 0; j < flows; j++) 
+        {
+            tmp = "10." + std::to_string(groups + i + 1) + "." + std::to_string(j + 1) + ".0";
+            address.SetBase(tmp.c_str(), "255.255.255.0");
+            auto inter = address.Assign(NetDeviceContainer(sinkConnections.Get(i * flows * 2 + 2 * j), sinkConnections.Get(i * flows * 2 + 2 * j + 1)));
+            sinkAddresses.push_back(inter.GetAddress(1));
+            otherInterfaces.Add(inter);
+
+            tmp = "10." + std::to_string(groups * 2 + i + 1) + "." + std::to_string(j + 1) + ".0";
+            address.SetBase(tmp.c_str(), "255.255.255.0");
+            inter = address.Assign(NetDeviceContainer(flowConnections.Get(i * flows * 2 + 2 * j), flowConnections.Get(i * flows * 2 + 2 * j + 1)));
+            otherInterfaces.Add(inter);
+        }
+    }
     
-    address.SetBase("10.1.4.0", "255.255.255.0");
-    Ipv4InterfaceContainer lowRttInterface;
-    Ipv4InterfaceContainer highRttInterface;
-    lowRttInterface = address.Assign(lowRtt);
-    highRttInterface = address.Assign(highRtt);
-    
-    address.SetBase("10.1.3.0", "255.255.255.0");
-    Ipv4InterfaceContainer uselessInterfaces;
-    uselessInterfaces = address.Assign(uselessDevices);
-    uselessInterfaces.Add(address.Assign(bottleneckToG1Devices));
+    std::string tmp = "10." + std::to_string(groups * 3 + 5) + ".1.0";
+    address.SetBase(tmp.c_str(), "255.255.255.0");
+    Ipv4InterfaceContainer G1ToG2Interface;
+    G1ToG2Interface = address.Assign(NetDeviceContainer(G1ToG2.Get(0), G1ToG2.Get(1)));
 
+    tmp = "10." + std::to_string(groups * 3 + 6) + ".1.0";
+    address.SetBase(tmp.c_str(), "255.255.255.0");
+    G1ToG2Interface.Add(address.Assign(NetDeviceContainer(G1ToG2.Get(2), G1ToG2.Get(3))));
 
-
-    /* Populate routing table */
-    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
 
     ApplicationContainer sinkApps; 
     ApplicationContainer serverApps;
@@ -261,7 +324,7 @@ main(int argc, char* argv[])
         sinkApps.Add(sinkHelper.Install(sinkNodes.Get(i)));
 
          /* Install TCP Transmitter on the station */
-        OnOffHelper server("ns3::TcpSocketFactory", (InetSocketAddress(sinkInterfaces.GetAddress(i), 9)));
+        OnOffHelper server("ns3::TcpSocketFactory", (InetSocketAddress(sinkAddresses[i], 9)));
         server.SetAttribute("PacketSize", UintegerValue(payloadSize));
         server.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
         server.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
@@ -273,8 +336,8 @@ main(int argc, char* argv[])
     sinkApps.Start(Seconds(0.0));
 
     Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable>();
-    x->SetAttribute ("Min", DoubleValue (1));
-    x->SetAttribute ("Max", DoubleValue (1.1));
+    x->SetAttribute ("Min", DoubleValue (10));
+    x->SetAttribute ("Max", DoubleValue (10.1));
     serverApps.StartWithJitter(Seconds(0), x);
 
     std::vector<Ptr<PacketSink>> sinks;
@@ -282,21 +345,51 @@ main(int argc, char* argv[])
         sinks.push_back(StaticCast<PacketSink>(sinkApps.Get(i)));
     }
 
-    Simulator::Schedule(Seconds(1.1), MakeBoundCallback(&CalculateThroughput, stream, sinks, 0));
-    auto lowAddress = Ipv4Address::ConvertFrom(lowRttInterface.GetAddress(0));
-    auto highAddress = Ipv4Address::ConvertFrom(highRttInterface.GetAddress(0));
-    
-    adressToInterface[lowAddress] = g1Node->GetObject<Ipv4>()->GetInterfaceForAddress(lowAddress);
-    adressToInterface[highAddress] = g1Node->GetObject<Ipv4>()->GetInterfaceForAddress(highAddress);
+    std::string fileNameWithoutExtension = "plots4/reroute-" + tcpVariant + "-" + std::to_string(cerlWindow);
+    std::string plotTitle = "Throughput to time";
+    std::string plotXAxisHeading = "Time (seconds)";
+    std::string plotYAxisHeading = "Normalized throughput";
+    std::string plotDatasetLabel = tcpVariant;
+    std::string datasetContext = "Dataset/Context/String";
 
-    DisableChannel(g1Node, highAddress);
-    Ipv4GlobalRoutingHelper::RecomputeRoutingTables();
+    // Create an aggregator.
+    Ptr<GnuplotAggregator> aggregator = CreateObject<GnuplotAggregator>(fileNameWithoutExtension);
+
+    // Set the aggregator's properties.
+    aggregator->SetTerminal("png");
+    aggregator->SetTitle(plotTitle);
+    aggregator->SetLegend(plotXAxisHeading, plotYAxisHeading);
+
+    // Add a data set to the aggregator.
+    aggregator->Add2dDataset(datasetContext, plotDatasetLabel);
+
+    aggregator->Enable();
+
+    Simulator::Schedule(Seconds(1.1), MakeBoundCallback(&CalculateThroughput, stream, aggregator, datasetContext, sinks, 0));
     
-    Simulator::Schedule(Seconds(20), MakeBoundCallback(&ChangeChannel, g1Node, lowAddress, highAddress));
+    auto lowAddressG1 = Ipv4Address::ConvertFrom(G1ToG2Interface.GetAddress(1)), lowAddressG2 = Ipv4Address::ConvertFrom(G1ToG2Interface.GetAddress(1));
+    auto highAddressG1 = Ipv4Address::ConvertFrom(G1ToG2Interface.GetAddress(2)), highAddressG2 = Ipv4Address::ConvertFrom(G1ToG2Interface.GetAddress(3));
+    
+    adressToInterface[lowAddressG1] = g1Node->GetObject<Ipv4>()->GetInterfaceForAddress(lowAddressG1);
+    adressToInterface[lowAddressG2] = g2Node->GetObject<Ipv4>()->GetInterfaceForAddress(lowAddressG2);
+    adressToInterface[highAddressG1] = g1Node->GetObject<Ipv4>()->GetInterfaceForAddress(highAddressG1);
+    adressToInterface[highAddressG2] = g2Node->GetObject<Ipv4>()->GetInterfaceForAddress(highAddressG2);
+
+    // Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+    DisableChannel(g1Node, highAddressG1);
+    DisableChannel(g2Node, highAddressG2);
+    
+    Simulator::Schedule(Seconds(200), MakeBoundCallback(&ChangeChannel, std::make_pair(g1Node, g2Node), std::make_pair(lowAddressG1, lowAddressG2), std::make_pair(highAddressG1, highAddressG2)));
 
     /* Start Simulation */
     Simulator::Stop(Seconds(simulationTime + 1));
     Simulator::Run();
+
+    
+
+    aggregator->Disable();
+    *stream->GetStream() << "max delay: " << maxAdaptabilityTime;
+    
     Simulator::Destroy();
     return 0;
 }

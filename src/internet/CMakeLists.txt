@@ -99,6 +99,7 @@ set(source_files
     model/tcp-ledbat.cc
     model/tcp-linux-reno.cc
     model/tcp-lp.cc
+    model/tcp-option-cwnd.cc
     model/tcp-option-rfc793.cc
     model/tcp-option-sack-permitted.cc
     model/tcp-option-sack.cc
@@ -110,6 +111,7 @@ set(source_files
     model/tcp-recovery-ops.cc
     model/tcp-rx-buffer.cc
     model/tcp-scalable.cc
+    # model/tcp-socket-adw.cc
     model/tcp-socket-base.cc
     model/tcp-socket-factory-impl.cc
     model/tcp-socket-factory.cc
@@ -226,6 +228,7 @@ set(header_files
     model/tcp-ledbat.h
     model/tcp-linux-reno.h
     model/tcp-lp.h
+    model/tcp-option-cwnd.h
     model/tcp-option-rfc793.h
     model/tcp-option-sack-permitted.h
     model/tcp-option-sack.h
@@ -237,6 +240,7 @@ set(header_files
     model/tcp-recovery-ops.h
     model/tcp-rx-buffer.h
     model/tcp-scalable.h
+    # model/tcp-socket-adw.h
     model/tcp-socket-base.h
     model/tcp-socket-factory.h
     model/tcp-socket-state.h

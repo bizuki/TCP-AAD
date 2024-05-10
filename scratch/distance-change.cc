@@ -18,10 +18,18 @@
 #include "ns3/yans-wifi-helper.h"
 #include "ns3/drop-tail-queue.h"
 #include "ns3/ptr.h"
+#include "ns3/stats-module.h"
+#include "ns3/rip-helper.h"
+#include "ns3/ipv4-static-routing-helper.h"
+#include "ns3/ipv4-list-routing-helper.h"
+#include "ns3/waypoint-mobility-model.h"
 
 NS_LOG_COMPONENT_DEFINE("wifi-tcp");
 
 using namespace ns3;
+
+std::map<Ipv4Address, size_t> adressToInterface;
+size_t dataRate = 5;
 
 /**
  * Calculate the throughput
@@ -32,26 +40,26 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, size_t index, Ptr<PacketSin
     Time now = Simulator::Now();
     double cur = (sink->GetTotalRx() - lastTotalRx) * 8.0;
     *stream->GetStream() << now.GetSeconds() << "\t" << cur << '\t' << index << std::endl;
-    Simulator::Schedule(MilliSeconds(100), MakeBoundCallback(&CalculateThroughput, stream, index, sink, sink->GetTotalRx()));
+    Simulator::Schedule(Seconds(1), MakeBoundCallback(&CalculateThroughput, stream, index, sink, sink->GetTotalRx()));
 }
 
-// static void
-// RxDrop(Ptr<const Packet> p)
-// {
-//     NS_LOG_UNCOND("RxDrop at " << Simulator::Now().GetSeconds());
-// }
+void
+ChangeChannel(Ptr<Node> node)
+{
+    auto mobility = node->GetObject<MobilityModel>();
+    auto pos = mobility->GetPosition();
 
+    pos.x = (double) (((int) std::round(pos.x) + 200) % 400);
+    mobility->SetPosition(pos);
+    
+    Simulator::Schedule(Seconds(200), MakeBoundCallback(&ChangeChannel, node));
+}
+
+
+// TODO: why such low bandwidth at high delay
 int
 main(int argc, char* argv[])
 {
-    // LogComponentEnable("TcpCerl", LOG_ALL);
-    // LogComponentEnable("TcpCerl", LOG_PREFIX_ALL);
-    // LogComponentEnable("TcpSocketBase", LOG_ALL);
-    // LogComponentEnable("TcpSocketBase", LOG_PREFIX_ALL);
-    // LogComponentEnable("TcpRecoveryOps", LOG_ALL);
-    // LogComponentEnable("TcpRecoveryOps", LOG_PREFIX_ALL);
-
-
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
     size_t dataRate = 1;                                /* Application layer datarate. */
     std::string tcpVariant{"TcpNewReno"}; /* TCP variant type. */
@@ -192,14 +200,37 @@ main(int argc, char* argv[])
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
     for (size_t i = 0; i < nodes; i++) 
     {
-        double angle = (M_PI / nodes) * i;
-        positionAlloc->Add(Vector(sin(angle) * distanceToAP, cos(angle) * distanceToAP, 0.0));
+        // double angle = (M_PI / nodes) * i;
+        positionAlloc->Add(Vector(0.0, 0.0, 0.0));
     }
 
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(g2Node);
-    mobility.Install(staNodes);
+
+    // mobility.SetMobilityModel("ns3::")
+
+    for (size_t i = 0; i < nodes; i++) {
+        Ptr<WaypointMobilityModel> waypointModel = CreateObject<WaypointMobilityModel>();
+        
+        for (size_t time = 100; time <= simulationTime; time += 100) {
+            auto remainder = time % 400;
+            switch (remainder) {
+                case 100:
+                case 200: {
+                    waypointModel->AddWaypoint(Waypoint(Time(std::to_string(time) + "s"), Vector(remainder, 0, 0)));
+                    break;
+                }
+                case 300:
+                case 0: {
+                    waypointModel->AddWaypoint(Waypoint(Time(std::to_string(time) + "s"), Vector(400 - remainder, 0, 0)));
+                    break;
+                }
+            }
+        }
+        auto node = staNodes.Get(i);
+        node->AggregateObject(waypointModel);
+    }
 
     /* Internet stack */
     InternetStackHelper stack;
@@ -248,6 +279,8 @@ main(int argc, char* argv[])
         serverApps.Add(server.Install(serverNodes.Get(i)));
         Simulator::Schedule(Seconds(1.1), MakeBoundCallback(&CalculateThroughput, stream, i, StaticCast<PacketSink>(sinkApps.Get(i)), 0));
     }
+
+    Simulator::Schedule(Seconds(100), MakeBoundCallback(&ChangeChannel, g2Node));
 
     sinkApps.Start(Seconds(0.0));
 

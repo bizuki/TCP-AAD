@@ -19,6 +19,7 @@
 
 #include "tcp-option.h"
 
+#include "tcp-option-cwnd.h"
 #include "tcp-option-rfc793.h"
 #include "tcp-option-sack-permitted.h"
 #include "tcp-option-sack.h"
@@ -73,6 +74,7 @@ TcpOption::CreateOption(uint8_t kind)
         {TcpOption::MSS, TcpOptionMSS::GetTypeId()},
         {TcpOption::NOP, TcpOptionNOP::GetTypeId()},
         {TcpOption::TS, TcpOptionTS::GetTypeId()},
+        {TcpOption::CWND, TcpOptionCwnd::GetTypeId()},
         {TcpOption::WINSCALE, TcpOptionWinScale::GetTypeId()},
         {TcpOption::SACKPERMITTED, TcpOptionSackPermitted::GetTypeId()},
         {TcpOption::SACK, TcpOptionSack::GetTypeId()},
@@ -103,6 +105,7 @@ TcpOption::IsKindKnown(uint8_t kind)
     case SACKPERMITTED:
     case SACK:
     case TS:
+    case CWND:
         // Do not add UNKNOWN here
         return true;
     }

@@ -258,7 +258,12 @@ TcpCerlX::GetTypeId()
     static TypeId tid = TypeId("ns3::TcpCerlX")
                             .SetParent<TcpCongestionOps>()
                             .SetGroupName("Internet")
-                            .AddConstructor<TcpCerlX>();
+                            .AddConstructor<TcpCerlX>()
+                            .AddAttribute("WindowSize",
+                            "Value of window size in seconds",
+                            UintegerValue(60),
+                            MakeUintegerAccessor(&TcpCerlX::m_windowSize),
+                            MakeUintegerChecker<uint32_t>());
     return tid;
 }
 
@@ -296,16 +301,19 @@ void
 TcpCerlX::AddPkt(TcpCerlX::PktInfo&& info) 
 {
     NS_LOG_FUNCTION(this);
+    NS_LOG_DEBUG("Adding packet " << m_sampleRtts.size() << " " << info.rtt);
     m_samples.push_back(info);
     m_sampleRtts.insert(info.rtt);
-    if ((Simulator::Now() - m_samples.back().ts).GetSeconds() > 3) 
+    NS_LOG_DEBUG("Removing packet" << m_windowSize);
+    if (m_samples.size() > 2 && (Simulator::Now() - m_samples.front().ts).GetSeconds() > m_windowSize) 
     {
-        auto& lastSample = m_samples.back();
-        m_sampleRtts.erase(lastSample.rtt);
-        m_samples.pop_back();
+        NS_LOG_DEBUG("Removing packet");
+        auto& lastSample = m_samples.front();
+        m_sampleRtts.erase(m_sampleRtts.find(lastSample.rtt));
+        m_samples.pop_front();
     
         m_rttMin = *m_sampleRtts.begin();
-        m_lMax = *m_sampleRtts.rbegin();
+        m_lMax = *m_sampleRtts.rbegin() - m_rttMin;
     
         m_rttSum -= lastSample.rtt;
         m_sampleSize--;

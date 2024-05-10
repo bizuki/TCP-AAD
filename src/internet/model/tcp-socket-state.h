@@ -196,6 +196,8 @@ class TcpSocketState : public Object
     uint32_t m_rcvTimestampValue{0};     //!< Receiver Timestamp value
     uint32_t m_rcvTimestampEchoReply{0}; //!< Sender Timestamp echoed by the receiver
 
+    uint32_t m_rcvCwndValue{0};     //!< Receiver Timestamp value
+
     // Pacing related variables
     bool m_pacing{false};                  //!< Pacing status
     DataRate m_maxPacingRate{0};           //!< Max Pacing rate

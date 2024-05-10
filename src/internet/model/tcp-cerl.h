@@ -2,6 +2,7 @@
 #define TCPCERL_H
 
 #include "tcp-congestion-ops.h"
+#include <deque>
 
 namespace ns3
 {
@@ -111,8 +112,9 @@ class TcpCerlX : public TcpCerlPlus
   private:
     void AddPkt(PktInfo&& info);
 
-    std::vector<PktInfo> m_samples;
-    std::set<Time> m_sampleRtts;
+    std::deque<PktInfo> m_samples;
+    std::multiset<Time> m_sampleRtts;
+    uint32_t m_windowSize; 
 };
 
 } // namespace ns3

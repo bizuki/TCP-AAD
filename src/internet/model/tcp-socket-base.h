@@ -219,6 +219,8 @@ class RttHistory
 class TcpSocketBase : public TcpSocket
 {
   public:
+    double m_baseIat{INFINITY};
+    double m_iat{INFINITY};
     /**
      * Get the type ID.
      * \brief Get the type ID.
@@ -270,6 +272,7 @@ class TcpSocketBase : public TcpSocket
      * \param rtt the RTT estimator
      */
     virtual void SetRtt(Ptr<RttEstimator> rtt);
+    double DelayWindow() const;
 
     /**
      * \brief Sets the Minimum RTO.
@@ -618,6 +621,7 @@ class TcpSocketBase : public TcpSocket
                                           const TcpHeader& header,
                                           const Ptr<const TcpSocketBase> socket);
 
+    uint32_t GetSegSize() const override;
   protected:
     // Implementing ns3::TcpSocket -- Attribute get/set
     // inherited, no need to doc
@@ -627,7 +631,6 @@ class TcpSocketBase : public TcpSocket
     void SetRcvBufSize(uint32_t size) override;
     uint32_t GetRcvBufSize() const override;
     void SetSegSize(uint32_t size) override;
-    uint32_t GetSegSize() const override;
     void SetInitialSSThresh(uint32_t threshold) override;
     uint32_t GetInitialSSThresh() const override;
     void SetInitialCwnd(uint32_t cwnd) override;
@@ -1227,6 +1230,25 @@ class TcpSocketBase : public TcpSocket
      */
     void AddOptionTimestamp(TcpHeader& header);
 
+    /** \brief Process the timestamp option from other side
+     *
+     * Get the timestamp and the echo, then save timestamp (which will
+     * be the echo value in our out-packets) and save the echoed timestamp,
+     * to utilize later to calculate RTT.
+     *
+     * \see EstimateRtt
+     * \param option Option from the segment
+     * \param seq Sequence number of the segment
+     */
+    void ProcessOptionCongestionWindow(const Ptr<const TcpOption> option);
+    /**
+     * \brief Add the CongestionWindow option to the header
+     *
+     *
+     * \param header TcpHeader to which add the option to
+     */
+    void AddOptionCongestionWindow(TcpHeader& header);
+
     /**
      * \brief Performs a safe subtraction between a and b (a-b)
      *
@@ -1274,7 +1296,21 @@ class TcpSocketBase : public TcpSocket
      */
     SequenceNumber32 GetHighRxAck() const;
 
+    virtual double GetTimeRatio();
+    virtual double UpdateDelayWindow(double theta);
+    virtual Time GetDelayTimeout();
+
   protected:
+    // dwnd related
+    double m_lambda{3};
+    double m_alpha{0.75};
+    double m_maxTimeout{0.5};
+    // double m_baseIat{INFINITY};
+    // double m_iat{INFINITY};
+    Time m_lastPacketTime{Time::Min()};
+    double m_dwnd{3};
+    bool m_dwndEnabled{false};
+
     // Counters and events
     EventId m_retxEvent{};     //!< Retransmission event
     EventId m_lastAckEvent{};  //!< Last ACK timeout event
@@ -1344,12 +1380,14 @@ class TcpSocketBase : public TcpSocket
     TracedValue<SequenceNumber32> m_highRxAckMark{0}; //!< Highest ack received
 
     // Options
-    bool m_sackEnabled{true};       //!< RFC SACK option enabled
-    bool m_winScalingEnabled{true}; //!< Window Scale option enabled (RFC 7323)
-    uint8_t m_rcvWindShift{0};      //!< Window shift to apply to outgoing segments
-    uint8_t m_sndWindShift{0};      //!< Window shift to apply to incoming segments
-    bool m_timestampEnabled{true};  //!< Timestamp option enabled
-    uint32_t m_timestampToEcho{0};  //!< Timestamp to echo
+    bool m_sackEnabled{true};              //!< RFC SACK option enabled
+    bool m_winScalingEnabled{true};        //!< Window Scale option enabled (RFC 7323)
+    uint8_t m_rcvWindShift{0};             //!< Window shift to apply to outgoing segments
+    uint8_t m_sndWindShift{0};             //!< Window shift to apply to incoming segments
+    bool m_timestampEnabled{true};         //!< Timestamp option enabled
+    bool m_congestionWindowEnabled{false}; //!< Congestion window option enabled
+    int32_t m_cwndDiff{0}; 
+    uint32_t m_timestampToEcho{0};         //!< Timestamp to echo
 
     EventId m_sendPendingDataEvent{}; //!< micro-delay event to send pending data
 

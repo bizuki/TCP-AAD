@@ -1,5 +1,6 @@
 #include "ns3/command-line.h"
 #include "ns3/config.h"
+#include "ns3/applications-module.h"
 #include "ns3/core-module.h"
 #include "ns3/internet-stack-helper.h"
 #include "ns3/ipv4-address-helper.h"
@@ -19,7 +20,7 @@
 #include "ns3/drop-tail-queue.h"
 #include "ns3/ptr.h"
 
-NS_LOG_COMPONENT_DEFINE("wifi-tcp");
+NS_LOG_COMPONENT_DEFINE("real-example");
 
 using namespace ns3;
 
@@ -35,12 +36,6 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, size_t index, Ptr<PacketSin
     Simulator::Schedule(MilliSeconds(100), MakeBoundCallback(&CalculateThroughput, stream, index, sink, sink->GetTotalRx()));
 }
 
-// static void
-// RxDrop(Ptr<const Packet> p)
-// {
-//     NS_LOG_UNCOND("RxDrop at " << Simulator::Now().GetSeconds());
-// }
-
 int
 main(int argc, char* argv[])
 {
@@ -53,16 +48,17 @@ main(int argc, char* argv[])
 
 
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
-    size_t dataRate = 1;                                /* Application layer datarate. */
-    std::string tcpVariant{"TcpNewReno"}; /* TCP variant type. */
-    size_t nodes = 1;
-    std::string phyRate = "HtMcs7";                     /* Physical layer bitrate. */
+    size_t dataRate = 9;                                /* Application layer datarate. */
+    std::string tcpVariant{"TcpNewReno"};               /* TCP variant type. */
+    size_t tcpNodes = 1;                                /* Number of TCP nodes */
+    size_t udpNodes = 0;                                /* Number of udp nodes. */
+    std::string phyRate = "HtMcs0";                     /* Physical layer bitrate. */
     double simulationTime = 10;                         /* Simulation time in seconds. */
-    double distanceToAP = 0.0;                          /* Distance to AP stantion from STA node. */
+    double distanceToAP = 60.0;                         /* Distance to AP stantion from STA node. */
     bool uplink = true;                                 /* Determine the location of server */
-    double errorRate = 0.0;                             /* Error rate on wired link */
+    double errorRate = 0;                               /* Error rate on wired link */
+    bool dack = false;                                  /* Simulation time in seconds. */
     size_t lLost = 0;
-    size_t cerlWindow = 60;
 
     /* Command line argument parser setup. */
     CommandLine cmd(__FILE__);
@@ -73,34 +69,36 @@ main(int argc, char* argv[])
                  "TcpHybla, TcpHighSpeed, TcpHtcp, TcpVegas, TcpScalable, TcpVeno, "
                  "TcpBic, TcpYeah, TcpIllinois, TcpWestwood, TcpWestwoodPlus, TcpLedbat ",
                 tcpVariant);
-    cmd.AddValue("nodes", "Number of nodes", nodes);
+    cmd.AddValue("tcpNodes", "Number of nodes", tcpNodes);
+    cmd.AddValue("udpNodes", "Number of udp nodes", udpNodes);
     cmd.AddValue("distanceToAP", "Distance to AP", distanceToAP);
     cmd.AddValue("phyRate", "Physical layer bitrate", phyRate);
     cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
     cmd.AddValue("errorRate", "Error rate on wired link", errorRate);
     cmd.AddValue("uplink", "Uplink", uplink);
     cmd.AddValue("lLost", "Lost mbps on L", lLost);
-    cmd.AddValue("cerlWindow", "Window size of CerlPlusX", cerlWindow);
+    cmd.AddValue("dack", "Use dack", dack);
     
     cmd.Parse(argc, argv);
 
+    auto nodes = tcpNodes + udpNodes;
+
     tcpVariant = std::string("ns3::") + tcpVariant;
 
-    // Select TCP variant. TODO: support different TCP types.
     TypeId tcpTid;
     NS_ABORT_MSG_UNLESS(TypeId::LookupByNameFailSafe(tcpVariant, &tcpTid),
                         "TypeId " << tcpVariant << " not found");
     Config::SetDefault("ns3::TcpL4Protocol::SocketType",
                     TypeIdValue(TypeId::LookupByName(tcpVariant)));
 
-    Config::SetDefault("ns3::TcpCerlX::WindowSize", UintegerValue(cerlWindow));
-    
-    if (tcpVariant == "ns3::TcpCerl" || tcpVariant == "ns3::TcpCerlPlus" || tcpVariant == "ns3::TcpCerlX") 
-    {
-        Config::SetDefault("ns3::TcpL4Protocol::RecoveryType", TypeIdValue(TypeId::LookupByName("ns3::TcpClassicRecovery")));
-    }
 
     /* Configure TCP Options */
+    // NOTE: you need my codebase with dynamic delay implemented to use these.
+    Config::SetDefault("ns3::TcpSocketBase::CongestionWindowOption", BooleanValue(true));
+    if (dack)
+    {
+        Config::SetDefault("ns3::TcpSocketBase::DynamicDelayWindow", BooleanValue(true));
+    }
     Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(payloadSize));
 
     WifiMacHelper wifiMac;
@@ -155,7 +153,6 @@ main(int argc, char* argv[])
     }
 
     pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate((std::to_string(dataRate * (nodes - lLost)) + ".5Mbps"))));
-    // pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate("0.8Mbps")));
     pointToPoint.SetChannelAttribute("Delay", StringValue("50ms"));
     Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("30p")));
 
@@ -170,7 +167,6 @@ main(int argc, char* argv[])
         em->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
         uselessDevices.Add(g1g2);
         g1g2.Get(1)->SetAttribute("ReceiveErrorModel", PointerValue(em));
-        // g1g2.Get(1)->TraceConnectWithoutContext("PhyRxDrop", MakeBoundCallback(&RxDrop));
     }    
 
     /* Configure AP */
@@ -225,14 +221,17 @@ main(int argc, char* argv[])
     ApplicationContainer serverApps;
 
     AsciiTraceHelper asciiTraceHelper;
-    Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("topology.throughput");
-    Ptr<OutputStreamWrapper> aggregatedStream = asciiTraceHelper.CreateFileStream("topology-aggregated.throughput");
+
+    std::string dackString = (dack ? "dack" : "no-dack");
+
+    Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("topology.throughput." + dackString);
+    Ptr<OutputStreamWrapper> aggregatedStream = asciiTraceHelper.CreateFileStream("topology-aggregated.throughput." + dackString);
 
     Ipv4InterfaceContainer& sinkInterfaces = uplink ? staInterfaces : appInterfaces;
     NodeContainer& serverNodes = uplink ? appNodes : staNodes;
     NodeContainer& sinkNodes = uplink ? staNodes : appNodes;
 
-    for (size_t i = 0; i < nodes; i++) 
+    for (size_t i = 0; i < tcpNodes; i++) 
     {
         /* Install TCP Receiver on the access point */
         PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
@@ -251,6 +250,21 @@ main(int argc, char* argv[])
 
     sinkApps.Start(Seconds(0.0));
 
+
+    ApplicationContainer udpApps; 
+    for (size_t i = 0; i < udpNodes; i++) 
+    {
+        UdpEchoServerHelper server(8);
+        udpApps.Add(server.Install(sinkNodes.Get(i + tcpNodes)));
+
+        UdpEchoClientHelper client(sinkInterfaces.GetAddress(i + tcpNodes), 8);
+        client.SetAttribute("MaxPackets", UintegerValue(0));
+        client.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
+        client.SetAttribute("PacketSize", UintegerValue(payloadSize));
+        serverApps.Add(server.Install(serverNodes.Get(i + tcpNodes)));
+    }
+    udpApps.Start(Seconds(0.0));
+
     Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable>();
     x->SetAttribute ("Min", DoubleValue (1));
     x->SetAttribute ("Max", DoubleValue (1.1));
@@ -261,14 +275,14 @@ main(int argc, char* argv[])
     Simulator::Run();
 
     double sum = 0;
-    for (size_t i = 0; i < nodes; i++) 
+    for (size_t i = 0; i < tcpNodes; i++) 
     {
-        double averageThroughput = ((StaticCast<PacketSink>(sinkApps.Get(i))->GetTotalRx() * 8) / (1e6 * simulationTime));
+        double averageThroughput = ((StaticCast<PacketSink>(sinkApps.Get(i))->GetTotalRx() * 8) / (1e6 * simulationTime * dataRate));
         sum += averageThroughput;
         *aggregatedStream->GetStream() << "average: " << i << '\t' << averageThroughput << '\n';
     }
 
-    *aggregatedStream->GetStream() << "average from all: " << sum / nodes << '\n';
+    *aggregatedStream->GetStream() << "average from all: " << sum / tcpNodes << '\n';
 
     Simulator::Destroy();
     return 0;
