@@ -1,0 +1,2 @@
+./ns3 run "scratch/real-example/topology --simulationTime=20 --tcpNodes=1 --dataRate=70 --udpNodes=0 --agg=true" &> bruh.err
+./ns3 run "scratch/real-example/topology --simulationTime=20 --tcpNodes=1 --dataRate=70 --udpNodes=0 --agg=false" &> bruh.err

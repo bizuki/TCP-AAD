@@ -14,6 +14,13 @@
 #include "ns3/ssid.h"
 #include "ns3/string.h"
 #include "ns3/tcp-westwood-plus.h"
+#include "ns3/tcp-option-ts.h"
+#include "ns3/tcp-option-cwnd.h"
+#include "ns3/tcp-socket-base.h"
+#include "ns3/wifi-net-device.h"
+#include "ns3/wifi-mac.h"
+#include "ns3/amsdu-subframe-header.h"
+#include "ns3/ampdu-subframe-header.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/yans-wifi-channel.h"
 #include "ns3/yans-wifi-helper.h"
@@ -36,6 +43,52 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, size_t index, Ptr<PacketSin
     Simulator::Schedule(MilliSeconds(100), MakeBoundCallback(&CalculateThroughput, stream, index, sink, sink->GetTotalRx()));
 }
 
+double prev;
+int cont = 0;
+int max = 0;
+
+void
+RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> pckt, const TcpHeader& header, Ptr<const TcpSocketBase> sock)
+{
+    if (!header.HasOption(TcpOption::TS)) return;
+
+    // auto delay = (Simulator::Now() - MilliSeconds((header.GetOption(TcpOption::TS)->GetObject<TcpOptionTS>())->GetTimestamp())).GetMilliSeconds();
+
+    double alpha = 0.75;
+    double smoothedIat = sock->m_baseIat * alpha + (1 - alpha) * sock->m_iat;
+
+    if (sock->m_iat <= prev)
+    {
+        cont++;
+        max = std::max(max, cont);
+    } else
+    {
+        cont = 0;
+    }
+    prev = smoothedIat * 3;
+
+
+    *stream->GetStream() << Simulator::Now().GetSeconds() 
+        // << ' ' << delay 
+        // << ' ' << lastDelay 
+        // << ' ' << sock->m_iat * 1000
+        // << ' ' << smoothedIat * 1000
+        // << ' ' << max
+        // << ' ' << cont
+        // << ' ' << sock->GetTimeRatio()
+        // << ' ' << sock->GetDelayTimeout().GetSeconds()
+        << ' ' << sock->m_delAckCount 
+        // << ' ' << sock->DelayWindow()
+        // << ' ' << sock->GetDelayTimeout().GetSeconds()
+        // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() 
+        << ' ' << std::endl;
+}
+
+void RxDrop(std::string context, Ptr<const Packet> pckt)
+{
+    // std::cout << Simulator::Now() << "PacketDropped" << std::endl;
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -48,17 +101,24 @@ main(int argc, char* argv[])
 
 
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
-    size_t dataRate = 9;                                /* Application layer datarate. */
-    std::string tcpVariant{"TcpNewReno"};               /* TCP variant type. */
+    size_t dataRate = 26;                               /* Application layer datarate. */
+    std::string tcpVariant{"TcpCubic"};                 /* TCP variant type. */
     size_t tcpNodes = 1;                                /* Number of TCP nodes */
     size_t udpNodes = 0;                                /* Number of udp nodes. */
-    std::string phyRate = "HtMcs0";                     /* Physical layer bitrate. */
+    std::string phyRate = "HtMcs7";                     /* Physical layer bitrate. */
     double simulationTime = 10;                         /* Simulation time in seconds. */
-    double distanceToAP = 60.0;                         /* Distance to AP stantion from STA node. */
+    double distanceToAP = 10.0;                         /* Distance to AP station from STA node. */
     bool uplink = true;                                 /* Determine the location of server */
     double errorRate = 0;                               /* Error rate on wired link */
     bool dack = false;                                  /* Simulation time in seconds. */
+    bool dtime = false;
+    bool dtimeLimit = false;
+    bool cwndEnabled = false;
     size_t lLost = 0;
+    size_t ampdu = 65535;
+    size_t amsdu = 0;
+    double lambda = 1.5;
+    size_t rngSeed = 1;
 
     /* Command line argument parser setup. */
     CommandLine cmd(__FILE__);
@@ -77,9 +137,18 @@ main(int argc, char* argv[])
     cmd.AddValue("errorRate", "Error rate on wired link", errorRate);
     cmd.AddValue("uplink", "Uplink", uplink);
     cmd.AddValue("lLost", "Lost mbps on L", lLost);
+    cmd.AddValue("Ampdu", "Ampdu size", ampdu);
+    cmd.AddValue("Amsdu", "Amsdu size", amsdu);
     cmd.AddValue("dack", "Use dack", dack);
+    cmd.AddValue("dtime", "Dynamic timeout", dtime);
+    cmd.AddValue("cwndEnabled", "Enable cwnd option", cwndEnabled);
+    cmd.AddValue("dtimeLimit", "Dynamic timeout with upper limit on delayed acks", dtimeLimit);
+    cmd.AddValue("lambda", "Lambda", lambda);
+    cmd.AddValue("rngSeed", "rng seed", rngSeed);
     
     cmd.Parse(argc, argv);
+
+    RngSeedManager::SetSeed(rngSeed);
 
     auto nodes = tcpNodes + udpNodes;
 
@@ -94,11 +163,21 @@ main(int argc, char* argv[])
 
     /* Configure TCP Options */
     // NOTE: you need my codebase with dynamic delay implemented to use these.
-    Config::SetDefault("ns3::TcpSocketBase::CongestionWindowOption", BooleanValue(true));
+    if (cwndEnabled)
+    {
+        Config::SetDefault("ns3::TcpSocketBase::CongestionWindowOption", BooleanValue(true));
+    }
+
+    NS_ASSERT(!dack || !dtime);
     if (dack)
     {
         Config::SetDefault("ns3::TcpSocketBase::DynamicDelayWindow", BooleanValue(true));
     }
+    if (dtime)
+    {
+        Config::SetDefault("ns3::TcpSocketBase::DynamicTimeout", BooleanValue(true));
+    }
+    Config::SetDefault("ns3::TcpSocketBase::Lambda", DoubleValue(lambda));
     Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(payloadSize));
 
     WifiMacHelper wifiMac;
@@ -136,7 +215,7 @@ main(int argc, char* argv[])
     /* Configure P2P connections*/
     PointToPointHelper pointToPoint;
     pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate(std::to_string(dataRate) + ".1Mbps")));
-    pointToPoint.SetChannelAttribute("Delay", StringValue("10ms"));
+    pointToPoint.SetChannelAttribute("Delay", StringValue("1ms"));
 
     NetDeviceContainer appDevices;
     NetDeviceContainer uselessDevices;
@@ -152,9 +231,9 @@ main(int argc, char* argv[])
         uselessDevices.Add(cont.Get(0));
     }
 
-    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate((std::to_string(dataRate * (nodes - lLost)) + ".5Mbps"))));
-    pointToPoint.SetChannelAttribute("Delay", StringValue("50ms"));
-    Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("30p")));
+    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate((std::to_string(dataRate * (tcpNodes - lLost)) + ".5Mbps"))));
+    pointToPoint.SetChannelAttribute("Delay", StringValue("1ms"));
+    // Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("30p")));
 
     {
         NodeContainer p2pNodesChannel;
@@ -175,12 +254,23 @@ main(int argc, char* argv[])
 
     NetDeviceContainer apDevice;
     apDevice = wifiHelper.Install(wifiPhy, wifiMac, g2Node);
+    
+    Ptr<WifiNetDevice> wifi_dev;
+    wifi_dev = DynamicCast<WifiNetDevice>(apDevice.Get(0));
+    wifi_dev->GetMac()->SetAttribute("BE_MaxAmpduSize", UintegerValue(ampdu));
+    wifi_dev->GetMac()->SetAttribute("BE_MaxAmsduSize", UintegerValue(amsdu));
 
     /* Configure STA */
     wifiMac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
 
     NetDeviceContainer staDevices;
     staDevices = wifiHelper.Install(wifiPhy, wifiMac, staNodes);
+    for (size_t i = 0; i < nodes; i++)
+    {
+        wifi_dev = DynamicCast<WifiNetDevice>(staDevices.Get(i));
+        wifi_dev->GetMac()->SetAttribute("BE_MaxAmpduSize", UintegerValue(ampdu));
+        wifi_dev->GetMac()->SetAttribute("BE_MaxAmsduSize", UintegerValue(amsdu));
+    }
 
     /* Mobility model */
     MobilityHelper mobility;
@@ -222,10 +312,21 @@ main(int argc, char* argv[])
 
     AsciiTraceHelper asciiTraceHelper;
 
-    std::string dackString = (dack ? "dack" : "no-dack");
 
-    Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("topology.throughput." + dackString);
-    Ptr<OutputStreamWrapper> aggregatedStream = asciiTraceHelper.CreateFileStream("topology-aggregated.throughput." + dackString);
+    auto dtimeType = (dtimeLimit ? (cwndEnabled ? "limited-dtime-cwnd" : "limited-dtime") : "dtime");
+    auto dackType = (dack ? "dack" : (dtime ? dtimeType : "default"));
+
+    std::string dackString 
+        = dackType + std::to_string((size_t)(lambda * 100)) 
+        + ".dr-" + std::to_string(dataRate) 
+        + ".rng-" + std::to_string(rngSeed) 
+        + ".tcp-" + std::to_string(tcpNodes) 
+        + ".udp-" + std::to_string(udpNodes)
+        + ".delayed";
+
+    Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("results/topology.throughput." + dackString);
+    Ptr<OutputStreamWrapper> streamCwnd = asciiTraceHelper.CreateFileStream("results/topology.cwnd." + dackString);
+    Ptr<OutputStreamWrapper> aggregatedStream = asciiTraceHelper.CreateFileStream("results/topology-aggregated.throughput." + dackString);
 
     Ipv4InterfaceContainer& sinkInterfaces = uplink ? staInterfaces : appInterfaces;
     NodeContainer& serverNodes = uplink ? appNodes : staNodes;
@@ -259,7 +360,7 @@ main(int argc, char* argv[])
 
         UdpEchoClientHelper client(sinkInterfaces.GetAddress(i + tcpNodes), 8);
         client.SetAttribute("MaxPackets", UintegerValue(0));
-        client.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
+        client.SetAttribute("Interval", TimeValue(MicroSeconds(100)));
         client.SetAttribute("PacketSize", UintegerValue(payloadSize));
         serverApps.Add(server.Install(serverNodes.Get(i + tcpNodes)));
     }
@@ -269,6 +370,19 @@ main(int argc, char* argv[])
     x->SetAttribute ("Min", DoubleValue (1));
     x->SetAttribute ("Max", DoubleValue (1.1));
     serverApps.StartWithJitter(Seconds(0), x);
+
+    auto connect = [nodes, tcpNodes, &staNodes, streamCwnd]() {
+        auto recieve_path = "/NodeList/" + std::to_string(2) + "/$ns3::TcpL4Protocol/SocketList/*/Rx";
+        Config::Connect(recieve_path, MakeBoundCallback(&RxOther, streamCwnd));
+        Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd", MakeCallback(&RxDrop));
+
+        // recieve_path = "/NodeList/" + std::to_string(2) + "/$ns3::TcpL4Protocol/SocketList/*/DelAckCount";
+        // Config::Connect(recieve_path,
+        //             MakeCallback(&MacRxTrace));
+    };
+
+
+    Simulator::Schedule(Seconds(1.1), connect);
 
     /* Start Simulation */
     Simulator::Stop(Seconds(simulationTime + 1));
@@ -283,6 +397,7 @@ main(int argc, char* argv[])
     }
 
     *aggregatedStream->GetStream() << "average from all: " << sum / tcpNodes << '\n';
+    std::cout << "average from all: " << sum / tcpNodes << '\n';
 
     Simulator::Destroy();
     return 0;

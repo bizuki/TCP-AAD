@@ -181,7 +181,7 @@ TcpSocketBase::GetTypeId()
                           "Lambda parameter from ADW algo ",
                           DoubleValue(3),
                           MakeDoubleAccessor(&TcpSocketBase::m_lambda),
-                          MakeDoubleChecker<uint32_t>(0))
+                          MakeDoubleChecker<double>(0))
             .AddAttribute("Alpha",
                           "Alpha parameter from ADW algo (used in smoothing function)",
                           DoubleValue(0.75),
@@ -196,6 +196,16 @@ TcpSocketBase::GetTypeId()
                           "Enable dynamic delay window",
                           BooleanValue(false),
                           MakeBooleanAccessor(&TcpSocketBase::m_dwndEnabled),
+                          MakeBooleanChecker())
+            .AddAttribute("DynamicTimeout",
+                          "Enable dynamic timeout",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&TcpSocketBase::m_dynamicTimeoutEnabled),
+                          MakeBooleanChecker())
+            .AddAttribute("DynamicTimeoutLimit",
+                          "Enable limit on amount of delayed acks for dynamic timeout",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&TcpSocketBase::m_dynamicTimeoutLimitEnabled),
                           MakeBooleanChecker())
             .AddTraceSource("RTO",
                             "Retransmission timeout",
@@ -217,6 +227,10 @@ TcpSocketBase::GetTypeId()
                             "TCP state",
                             MakeTraceSourceAccessor(&TcpSocketBase::m_state),
                             "ns3::TcpStatesTracedValueCallback")
+            .AddTraceSource("DelAckCount",
+                            "DelAckCount",
+                            MakeTraceSourceAccessor(&TcpSocketBase::m_delAckCount),
+                            "ns3::TcpStatesTracedValueCallback::Uint32")
             .AddTraceSource("CongState",
                             "TCP Congestion machine state",
                             MakeTraceSourceAccessor(&TcpSocketBase::m_congStateTrace),
@@ -356,6 +370,8 @@ TcpSocketBase::TcpSocketBase(const TcpSocketBase& sock)
       m_lambda(sock.m_lambda),
       m_alpha(sock.m_alpha),
       m_dwndEnabled(sock.m_dwndEnabled),
+      m_dynamicTimeoutEnabled(sock.m_dynamicTimeoutEnabled),
+      m_dynamicTimeoutLimitEnabled(sock.m_dynamicTimeoutLimitEnabled),
       m_dupAckCount(sock.m_dupAckCount),
       m_delAckCount(0),
       m_delAckMaxCount(sock.m_delAckMaxCount),
@@ -3576,7 +3592,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     NS_LOG_DEBUG("Data segment, seq=" << tcpHeader.GetSequenceNumber()
                                       << " pkt size=" << p->GetSize());
 
-    if (m_dwndEnabled && m_lastPacketTime != Time::Min())
+    if (m_lastPacketTime != Time::Min())
     {
         m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
         m_baseIat = std::min(m_iat, m_baseIat);
@@ -3648,7 +3664,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     }
     else
     { // In-sequence packet: ACK if delayed ack count allows
-        if (++m_delAckCount >= DelayWindow())
+        if (++m_delAckCount >= DelayWindow() && (!m_dynamicTimeoutEnabled))
         {
             m_delAckEvent.Cancel();
             m_delAckCount = 0;
@@ -3670,7 +3686,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
         else if (!m_delAckEvent.IsExpired())
         {
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-            if (m_dwndEnabled)
+            if (m_dwndEnabled || m_dynamicTimeoutEnabled)
             {
                 m_delAckEvent.Cancel();
                 m_delAckEvent =
@@ -3933,7 +3949,7 @@ TcpSocketBase::DelAckTimeout()
 {
     m_delAckCount = 0;
     NS_LOG_DEBUG("AckTimeout");
-    m_dwnd = std::max(m_lambda, m_dwnd - (1 - GetTimeRatio()));
+    m_dwnd = std::max(m_lambda * GetSegSize(), m_dwnd - (1 - GetTimeRatio()));
 
     m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
     if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
@@ -4784,7 +4800,7 @@ TcpSocketBase::GetHighRxAck() const
 }
 
 double 
-TcpSocketBase::GetTimeRatio()
+TcpSocketBase::GetTimeRatio() const
 {
     double timeRatio;
     
@@ -4805,11 +4821,11 @@ double
 TcpSocketBase::UpdateDelayWindow(double theta)
 {
     NS_LOG_FUNCTION(this << theta);
-    double R = std::min(m_tcb->m_rcvCwndValue, static_cast<uint32_t>(AdvertisedWindowSize()));
+    double R = std::min(m_tcb->m_rcvCwndValue, static_cast<uint32_t>(AdvertisedWindowSize() - GetSegSize() * 2));
     
     if (m_cwndDiff > 0) 
     {
-        m_dwnd = std::min(m_dwnd + (1 - theta), R);
+        m_dwnd = std::min(m_dwnd + (1 - theta) * GetSegSize(), R);
     } 
     else if (m_cwndDiff < 0) 
     {
@@ -4822,12 +4838,13 @@ TcpSocketBase::UpdateDelayWindow(double theta)
 }
 
 Time 
-TcpSocketBase::GetDelayTimeout()
+TcpSocketBase::GetDelayTimeout() const
 {
     NS_LOG_FUNCTION(this);
-    if (m_dwndEnabled)
+    if (m_dwndEnabled || m_dynamicTimeoutEnabled)
     {
         double smoothedIat = m_alpha * m_baseIat + (1 - m_alpha) * m_iat;
+        // NS_LOG_DEBUG("Bruh " << std::min(m_lambda * smoothedIat, m_maxTimeout) << ' ' << smoothedIat);
         return Seconds(std::min(m_lambda * smoothedIat, m_maxTimeout));
     }
 
@@ -4840,8 +4857,20 @@ TcpSocketBase::DelayWindow() const
     NS_LOG_FUNCTION(this);
     if (m_dwndEnabled)
     {
-        // std::cout << m_dwnd << ' ' << m_dwnd / GetSegSize() << std::endl;
-        return m_dwnd / GetSegSize();
+        return (m_dwnd / GetSegSize());
+    }
+
+    if (m_dynamicTimeoutEnabled && m_dynamicTimeoutLimitEnabled)
+    {
+        return (
+            m_congestionWindowEnabled ? m_tcb->m_rcvCwndValue 
+                                      : AdvertisedWindowSize(true)
+        ) / GetSegSize();
+    }
+
+    if (m_dynamicTimeoutEnabled)
+    {
+        return UINT64_MAX;
     }
 
     return m_delAckMaxCount;

@@ -157,6 +157,29 @@ def create_cmp_plot(file: str):
     df.plot(x='ts', y='cwnd', ax=new_plt, secondary_y=True)
 
     fig.savefig(f'./cmp_iat.png')
+    
+        
+def create_throughput_plot(stats: dict[str, list[list[tuple[float, float]], float]]):
+
+    for i, dr in enumerate([40, 70]):
+        fig = plt.figure()
+        current_stats = {name: stat[i] for name, stat in stats.items()}
+        print(current_stats)
+
+        new_plt = fig.add_subplot()
+
+        for name, stat in current_stats.items():
+
+            new_plt.plot(*zip(*stat), label=name)
+
+        new_plt.set_ylabel('Average throughput (%)')
+        new_plt.set_xlabel('Lambda param')
+
+        new_plt.set_label(f'Throughput at data rate = {dr}Mbps')
+        new_plt.legend()
+
+        _create_dir('./plots')
+        fig.savefig(f'./plots/throughput_{dr}.png')
 
 
 def _create_dir(path: str):

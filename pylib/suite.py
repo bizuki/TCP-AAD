@@ -194,5 +194,77 @@ def collect_window_size_adapt(params) -> list[tuple[int, float]]:
     return throughputs
 
 
+def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> list[list[tuple[float, float]]]:
+    match case:
+        case 'awnd':
+            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=False)
+        case 'cwnd':
+            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=True)
+        case 'no-limit':
+            case_specific = dict(dtime=True, dtimeLimit=False)
+        case 'default':
+            case_specific = dict(dtime=False)
+        case _:
+            raise ValueError(f'unknown {case=}')
+
+    def get_name():
+        match case:
+            case 'awnd':
+                return 'limited-dtime'
+            case 'cwnd':
+                return 'limited-dtime-cwnd'
+            case 'no-limit':
+                return 'dtime'
+            case 'default':
+                return 'default'
+            case _:
+                raise ValueError(f'unknown {case=}')
+
+    res = []
+    for dr in (15, 70):
+        for tcpNodes, udpNodes in ((1, 0), (2, 0), (3, 0), (4, 0), (1, 20), (4, 20)):
+            params = dict(
+                simulationTime=20,
+                tcpNodes=tcpNodes,
+                dataRate=dr // tcpNodes,
+                udpNodes=udpNodes,
+                **case_specific
+            )
+
+            def run_once(params):
+                res = 0
+                for seed in range(1, rng_runs + 1):
+                    lambda_name = int(params['lambda'] * 100)
+                        
+                    algo_name = get_name()
+                    params['rngSeed'] = seed
+
+                    path = f'./results/topology-aggregated.throughput.{algo_name}{lambda_name}.dr-{dr // tcpNodes}.rng-{seed}.tcp-{tcpNodes}.udp-{udpNodes}.delayed'
+
+                    if  not (os.path.exists(path) and len(lines := open(path).readlines()) > 1) or recalc:
+                        os.system(f'./ns3 run "scratch/real-example/topology {_params_to_command_args(params)}"')
+                    
+                    line = next(filter(lambda s: s.startswith('average from all:'), lines))
+                    res += float(line.removeprefix('average from all: '))
+                return res / rng_runs
+
+            throughputs = []
+            l, r = 100, 300
+            step = 25
+
+            for i in range(l, r + 1, step):
+                print(f'calculating for lambda {i / 100}, {dr=}, {tcpNodes=}, {udpNodes=}')
+                params.update({'lambda': i / 100})
+                throughputs.append((i / 100, run_once(params)))
+
+                if case == 'default':
+                    throughputs = [(lam / 100, run_once(params)) for lam in range(l, r + 1, step)]
+                    break
+
+            res.append(throughputs)
+            
+    return res
+
+
 def _params_to_command_args(params: dict):
     return ' '.join([f'--{k}={v}' for k, v in params.items()])

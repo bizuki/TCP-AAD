@@ -219,8 +219,6 @@ class RttHistory
 class TcpSocketBase : public TcpSocket
 {
   public:
-    double m_baseIat{INFINITY};
-    double m_iat{INFINITY};
     /**
      * Get the type ID.
      * \brief Get the type ID.
@@ -252,6 +250,7 @@ class TcpSocketBase : public TcpSocket
      */
     TcpSocketBase(const TcpSocketBase& sock);
     ~TcpSocketBase() override;
+
 
     // Set associated Node, TcpL4Protocol, RttEstimator to this socket
 
@@ -622,6 +621,10 @@ class TcpSocketBase : public TcpSocket
                                           const Ptr<const TcpSocketBase> socket);
 
     uint32_t GetSegSize() const override;
+
+    double GetTimeRatio() const;
+    double UpdateDelayWindow(double theta);
+    Time GetDelayTimeout() const;
   protected:
     // Implementing ns3::TcpSocket -- Attribute get/set
     // inherited, no need to doc
@@ -1296,20 +1299,20 @@ class TcpSocketBase : public TcpSocket
      */
     SequenceNumber32 GetHighRxAck() const;
 
-    virtual double GetTimeRatio();
-    virtual double UpdateDelayWindow(double theta);
-    virtual Time GetDelayTimeout();
-
-  protected:
+  public:
     // dwnd related
     double m_lambda{3};
     double m_alpha{0.75};
     double m_maxTimeout{0.5};
-    // double m_baseIat{INFINITY};
-    // double m_iat{INFINITY};
+    double m_baseIat{INFINITY};
+    double m_iat{INFINITY};
     Time m_lastPacketTime{Time::Min()};
     double m_dwnd{3};
     bool m_dwndEnabled{false};
+
+    // window
+    bool m_dynamicTimeoutEnabled{false};
+    bool m_dynamicTimeoutLimitEnabled{false};
 
     // Counters and events
     EventId m_retxEvent{};     //!< Retransmission event
@@ -1320,11 +1323,11 @@ class TcpSocketBase : public TcpSocket
 
     // ACK management
     uint32_t m_dupAckCount{0};    //!< Dupack counter
-    uint32_t m_delAckCount{0};    //!< Delayed ACK counter
+    TracedValue<uint32_t> m_delAckCount{0};    //!< Delayed ACK counter
     uint32_t m_delAckMaxCount{0}; //!< Number of packet to fire an ACK before delay timeout
 
     // Nagle algorithm
-    bool m_noDelay{false}; //!< Set to true to disable Nagle's algorithm
+    bool m_noDelay{true}; //!< Set to true to disable Nagle's algorithm
 
     // Retries
     uint32_t m_synCount{0};      //!< Count of remaining connection retries

@@ -85,6 +85,7 @@
     #include <ns3/rtt-estimator.h>
     #include <ns3/tcp-bbr.h>
     #include <ns3/tcp-bic.h>
+    #include <ns3/tcp-cerl.h>
     #include <ns3/tcp-congestion-ops.h>
     #include <ns3/tcp-cubic.h>
     #include <ns3/tcp-dctcp.h>
@@ -97,6 +98,7 @@
     #include <ns3/tcp-ledbat.h>
     #include <ns3/tcp-linux-reno.h>
     #include <ns3/tcp-lp.h>
+    #include <ns3/tcp-option-cwnd.h>
     #include <ns3/tcp-option-rfc793.h>
     #include <ns3/tcp-option-sack-permitted.h>
     #include <ns3/tcp-option-sack.h>

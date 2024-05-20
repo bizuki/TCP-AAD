@@ -1,3 +1,7 @@
 cmake-cache/*
 build/*
 */__pycache__/**
+plots/*
+results/*
+bruh.err
+.vscode/*
