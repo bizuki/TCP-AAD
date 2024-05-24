@@ -46,6 +46,7 @@ namespace ns3
 {
 
 NS_OBJECT_ENSURE_REGISTERED(MpduAggregator);
+std::map<uint64_t, uint64_t> ___aggregations = {};
 
 TypeId
 MpduAggregator::GetTypeId()
@@ -87,6 +88,8 @@ MpduAggregator::SetLinkId(uint8_t linkId)
 void
 MpduAggregator::Aggregate(Ptr<const WifiMpdu> mpdu, Ptr<Packet> ampdu, bool isSingle)
 {
+    ___aggregations[ampdu->GetUid()] = mpdu->GetPacket()->GetUid();
+    ___aggregations[mpdu->GetPacket()->GetUid()] = mpdu->GetPacket()->GetUid();
     NS_LOG_FUNCTION(mpdu << ampdu << isSingle);
     NS_ASSERT(ampdu);
     // if isSingle is true, then ampdu must be empty
@@ -262,6 +265,16 @@ MpduAggregator::GetNextAmpdu(Ptr<WifiMpdu> mpdu,
             mpduList.clear();
         }
     }
+
+    for (auto p : mpduList) 
+    {
+        ___aggregations[mpdu->GetOriginal()->GetPacket()->GetUid()] = mpdu->GetOriginal()->GetPacket()->GetUid();
+        ___aggregations[p->GetPacket()->GetUid()] = mpdu->GetOriginal()->GetPacket()->GetUid();
+        // std::cout << mpduList.size() << ' ' << p->GetPacket()->GetUid() << ' ' << p->GetOriginal()->GetPacket()->GetUid() << std::endl;
+        // std::cout << p->GetPacket()->GetUid() << ' ';
+    }
+    // std::cout << '\n';
+
 
     return mpduList;
 }

@@ -1309,6 +1309,9 @@ class TcpSocketBase : public TcpSocket
     Time m_lastPacketTime{Time::Min()};
     double m_dwnd{3};
     bool m_dwndEnabled{false};
+    size_t m_aggregationEst{__UINT32_MAX__};
+    size_t aggregationSize{0};
+    Time m_lastUpdate{Time::FromInteger(0, Time::S)};
 
     // window
     bool m_dynamicTimeoutEnabled{false};

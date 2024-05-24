@@ -194,7 +194,7 @@ def collect_window_size_adapt(params) -> list[tuple[int, float]]:
     return throughputs
 
 
-def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> list[list[tuple[float, float]]]:
+def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> dict[tuple, list[tuple[float, float]]]:
     match case:
         case 'awnd':
             case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=False)
@@ -220,9 +220,12 @@ def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> list[list[
             case _:
                 raise ValueError(f'unknown {case=}')
 
-    res = []
-    for dr in (15, 70):
-        for tcpNodes, udpNodes in ((1, 0), (2, 0), (3, 0), (4, 0), (1, 20), (4, 20)):
+    res = {}
+
+    scenarios = [(1, 0)]#((1, 0), (2, 0), (3, 0), (4, 0), (1, 20), (4, 20))
+
+    for dr in [15]:
+        for tcpNodes, udpNodes in scenarios:
             params = dict(
                 simulationTime=20,
                 tcpNodes=tcpNodes,
@@ -241,16 +244,16 @@ def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> list[list[
 
                     path = f'./results/topology-aggregated.throughput.{algo_name}{lambda_name}.dr-{dr // tcpNodes}.rng-{seed}.tcp-{tcpNodes}.udp-{udpNodes}.delayed'
 
-                    if  not (os.path.exists(path) and len(lines := open(path).readlines()) > 1) or recalc:
+                    if not (os.path.exists(path) and len(open(path).readlines()) > 1) or recalc:
                         os.system(f'./ns3 run "scratch/real-example/topology {_params_to_command_args(params)}"')
                     
-                    line = next(filter(lambda s: s.startswith('average from all:'), lines))
+                    line = next(filter(lambda s: s.startswith('average from all:'), open(path).readlines()))
                     res += float(line.removeprefix('average from all: '))
                 return res / rng_runs
 
             throughputs = []
-            l, r = 100, 300
-            step = 25
+            l, r = 100, 500
+            step = 50
 
             for i in range(l, r + 1, step):
                 print(f'calculating for lambda {i / 100}, {dr=}, {tcpNodes=}, {udpNodes=}')
@@ -258,10 +261,10 @@ def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> list[list[
                 throughputs.append((i / 100, run_once(params)))
 
                 if case == 'default':
-                    throughputs = [(lam / 100, run_once(params)) for lam in range(l, r + 1, step)]
+                    throughputs = [(lam / 100, throughputs[-1][1]) for lam in range(l, r + 1, step)]
                     break
 
-            res.append(throughputs)
+            res[(dr, tcpNodes, udpNodes)] = throughputs
             
     return res
 

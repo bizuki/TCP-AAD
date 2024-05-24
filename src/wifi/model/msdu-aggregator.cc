@@ -149,6 +149,8 @@ MsduAggregator::GetNextAmsdu(Ptr<WifiMpdu> peekedItem,
         return nullptr;
     }
 
+    std::cout << 323 << std::endl;
+
     // Aggregation succeeded
     return m_htFem->CreateAliasIfNeeded(amsdu);
 }

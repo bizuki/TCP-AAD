@@ -3595,9 +3595,18 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     if (m_lastPacketTime != Time::Min())
     {
         m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
-        m_baseIat = std::min(m_iat, m_baseIat);
+        if (m_iat >= 1e-4)
+        {
+            // std::cout << (Simulator::Now() - m_lastUpdate).GetSeconds() << std::endl;
+            if ((Simulator::Now() - m_lastUpdate).GetSeconds() > 0.3)
+            {
+                m_baseIat = INFINITY;
+                m_lastUpdate = Simulator::Now();
+            }
+            m_baseIat = std::min(m_iat, m_baseIat);
 
-        UpdateDelayWindow(GetTimeRatio());
+            UpdateDelayWindow(GetTimeRatio());
+        }
     }
     else
     {
@@ -3664,7 +3673,13 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     }
     else
     { // In-sequence packet: ACK if delayed ack count allows
-        if (++m_delAckCount >= DelayWindow() && (!m_dynamicTimeoutEnabled))
+        aggregationSize++;
+        if (aggregationSize >= m_aggregationEst) 
+        {
+            m_aggregationEst = __UINT32_MAX__;
+        }
+        // std::cout << Simulator::Now().GetSeconds() << ' ' << m_iat << ' ' << m_baseIat << ' ' << GetDelayTimeout().GetSeconds() << std::endl;
+        if (++m_delAckCount >= DelayWindow())
         {
             m_delAckEvent.Cancel();
             m_delAckCount = 0;
@@ -3947,7 +3962,11 @@ TcpSocketBase::ReTxTimeout()
 void
 TcpSocketBase::DelAckTimeout()
 {
+    // std::cout << m_delAckCount << ' ' << 123 << std::endl;
     m_delAckCount = 0;
+    m_aggregationEst = aggregationSize;
+    aggregationSize = 0;
+    
     NS_LOG_DEBUG("AckTimeout");
     m_dwnd = std::max(m_lambda * GetSegSize(), m_dwnd - (1 - GetTimeRatio()));
 
@@ -4870,7 +4889,8 @@ TcpSocketBase::DelayWindow() const
 
     if (m_dynamicTimeoutEnabled)
     {
-        return UINT64_MAX;
+        // std::cout << m_aggregationEst << std::endl;
+        return INFINITY;//::max((uint32_t) m_aggregationEst / 2, m_delAckMaxCount);//m_aggregationEst / 3;
     }
 
     return m_delAckMaxCount;

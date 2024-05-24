@@ -31,6 +31,8 @@
 namespace ns3
 {
 
+extern std::map<uint64_t, uint64_t> ___aggregations;
+
 class AmpduSubframeHeader;
 class WifiTxVector;
 class QosTxop;

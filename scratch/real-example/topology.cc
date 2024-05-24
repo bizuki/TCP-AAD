@@ -26,6 +26,7 @@
 #include "ns3/yans-wifi-helper.h"
 #include "ns3/drop-tail-queue.h"
 #include "ns3/ptr.h"
+#include "ns3/mpdu-aggregator.h"
 
 NS_LOG_COMPONENT_DEFINE("real-example");
 
@@ -46,12 +47,18 @@ CalculateThroughput(Ptr<OutputStreamWrapper> stream, size_t index, Ptr<PacketSin
 double prev;
 int cont = 0;
 int max = 0;
+uint64_t lastAggr = 0;
+int aggrSeq = 0;
 
 void
 RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> pckt, const TcpHeader& header, Ptr<const TcpSocketBase> sock)
 {
     if (!header.HasOption(TcpOption::TS)) return;
-
+    // std::cout << pckt->GetUid() << ' ' << ___aggregations[pckt->GetUid()] << std::endl;
+    if (!___aggregations.count(pckt->GetUid())) 
+    {
+        lastAggr = 0;
+    }
     // auto delay = (Simulator::Now() - MilliSeconds((header.GetOption(TcpOption::TS)->GetObject<TcpOptionTS>())->GetTimestamp())).GetMilliSeconds();
 
     double alpha = 0.75;
@@ -72,22 +79,47 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
         // << ' ' << delay 
         // << ' ' << lastDelay 
         // << ' ' << sock->m_iat * 1000
+        // << ' ' << sock->m_baseIat * 1000
         // << ' ' << smoothedIat * 1000
         // << ' ' << max
         // << ' ' << cont
         // << ' ' << sock->GetTimeRatio()
         // << ' ' << sock->GetDelayTimeout().GetSeconds()
+        // << ' ' << lastAggr
+        << ' ' << aggrSeq
         << ' ' << sock->m_delAckCount 
+        // << ' ' << sock->m_aggregationEst
         // << ' ' << sock->DelayWindow()
         // << ' ' << sock->GetDelayTimeout().GetSeconds()
         // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() 
         << ' ' << std::endl;
+    
+    if (___aggregations[pckt->GetUid()] != lastAggr)
+    {
+        lastAggr = ___aggregations[pckt->GetUid()];
+        aggrSeq = 0;
+    } else
+    {
+        aggrSeq++;
+    }
 }
 
 void RxDrop(std::string context, Ptr<const Packet> pckt)
 {
     // std::cout << Simulator::Now() << "PacketDropped" << std::endl;
 }
+
+// double totalBusy = 0;
+
+// void TxOccupancy (std::string context, Time start, Time duration, WifiPhyState newState)
+// {
+//   if (newState == WifiPhyState::TX)
+//   {
+//     totalBusy += duration.GetSeconds();
+//         std::cout << context << ' ' << duration << ' ' << totalBusy << std::endl;
+//   }
+// }
+
 
 int
 main(int argc, char* argv[])
@@ -102,7 +134,7 @@ main(int argc, char* argv[])
 
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
     size_t dataRate = 26;                               /* Application layer datarate. */
-    std::string tcpVariant{"TcpCubic"};                 /* TCP variant type. */
+    std::string tcpVariant{"TcpLinuxReno"};                 /* TCP variant type. */
     size_t tcpNodes = 1;                                /* Number of TCP nodes */
     size_t udpNodes = 0;                                /* Number of udp nodes. */
     std::string phyRate = "HtMcs7";                     /* Physical layer bitrate. */
@@ -182,7 +214,7 @@ main(int argc, char* argv[])
 
     WifiMacHelper wifiMac;
     WifiHelper wifiHelper;
-    wifiHelper.SetStandard(WIFI_STANDARD_80211ac);
+    wifiHelper.SetStandard(WIFI_STANDARD_80211n);
     
     /* Set up Legacy Channel */
     YansWifiChannelHelper wifiChannel;
@@ -214,7 +246,7 @@ main(int argc, char* argv[])
 
     /* Configure P2P connections*/
     PointToPointHelper pointToPoint;
-    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate(std::to_string(dataRate) + ".1Mbps")));
+    pointToPoint.SetDeviceAttribute("DataRate", StringValue("1Gbps"));
     pointToPoint.SetChannelAttribute("Delay", StringValue("1ms"));
 
     NetDeviceContainer appDevices;
@@ -231,8 +263,10 @@ main(int argc, char* argv[])
         uselessDevices.Add(cont.Get(0));
     }
 
-    pointToPoint.SetDeviceAttribute("DataRate", DataRateValue(DataRate((std::to_string(dataRate * (tcpNodes - lLost)) + ".5Mbps"))));
+    pointToPoint.SetDeviceAttribute("DataRate", StringValue("1Gbps"));
     pointToPoint.SetChannelAttribute("Delay", StringValue("1ms"));
+    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1e9));
+    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1e9));
     // Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("30p")));
 
     {
@@ -259,6 +293,8 @@ main(int argc, char* argv[])
     wifi_dev = DynamicCast<WifiNetDevice>(apDevice.Get(0));
     wifi_dev->GetMac()->SetAttribute("BE_MaxAmpduSize", UintegerValue(ampdu));
     wifi_dev->GetMac()->SetAttribute("BE_MaxAmsduSize", UintegerValue(amsdu));
+    // auto stateHelper = wifi_dev->GetPhy()->GetState();
+    // stateHelper->TraceConnect("State", std::to_string(wifi_dev->GetNode()->GetId()), MakeCallback(TxOccupancy));
 
     /* Configure STA */
     wifiMac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));

@@ -138,33 +138,42 @@ def create_delay_plot(file: str):
 def create_cmp_plot(file: str):
     lines = open(file, 'r').readlines()
 
-    ts, delay, smoothed_delay, iat, cwnd = zip(*map(lambda line: tuple(map(float, line.split())), lines))
+    ts, currently_delayed, true_aggregation = zip(*map(lambda line: tuple(map(float, line.split())), lines))
     
     df =pd.DataFrame(
         data={
             'ts': ts,
-            'delay': delay,
-            'smoothed_delay': smoothed_delay,
-            'iat': iat,
-            'cwnd': cwnd
+            'currently_delayed': currently_delayed,
+            'true_aggregation': true_aggregation
+            # 'delay': delay,
+            # 'smoothed_delay': smoothed_delay,
+            # 'iat': iat,
+            # 'cwnd': cwnd
+            
         }
     )
 
     fig = plt.figure()
     new_plt = fig.add_subplot()
-    
-    df.plot(x='ts', y='iat', ax=new_plt)
-    df.plot(x='ts', y='cwnd', ax=new_plt, secondary_y=True)
 
-    fig.savefig(f'./cmp_iat.png')
+    
+    df.plot(x='ts', y='currently_delayed', ax=new_plt)
+    df.plot(x='ts', y='true_aggregation', ax=new_plt)
+
+    new_plt.set_xbound(4, 4.3)
+    new_plt.set_title('Lambda = 1.5')
+
+    fig.savefig(f'./cmp_15_1.5_lambda.png')
     
         
-def create_throughput_plot(stats: dict[str, list[list[tuple[float, float]], float]]):
+def create_throughput_plot(stats: dict[str, dict[tuple, list[tuple[float, float]]]]):
 
-    for i, dr in enumerate([40, 70]):
+    suites = list(stats.values())[0]
+
+    for suite in suites:
+        dr, tcp, udp = suite
         fig = plt.figure()
-        current_stats = {name: stat[i] for name, stat in stats.items()}
-        print(current_stats)
+        current_stats = {name: stat[suite] for name, stat in stats.items()}
 
         new_plt = fig.add_subplot()
 
@@ -175,11 +184,12 @@ def create_throughput_plot(stats: dict[str, list[list[tuple[float, float]], floa
         new_plt.set_ylabel('Average throughput (%)')
         new_plt.set_xlabel('Lambda param')
 
-        new_plt.set_label(f'Throughput at data rate = {dr}Mbps')
+        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Tcp nodes = {tcp}, Udp nodes = {udp}')
         new_plt.legend()
 
+
         _create_dir('./plots')
-        fig.savefig(f'./plots/throughput_{dr}.png')
+        fig.savefig(f'./plots/throughput_{dr=}_{tcp=}_{udp=}.png')
 
 
 def _create_dir(path: str):
