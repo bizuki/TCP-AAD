@@ -54,7 +54,6 @@ void
 RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> pckt, const TcpHeader& header, Ptr<const TcpSocketBase> sock)
 {
     if (!header.HasOption(TcpOption::TS)) return;
-    // std::cout << pckt->GetUid() << ' ' << ___aggregations[pckt->GetUid()] << std::endl;
     if (!___aggregations.count(pckt->GetUid())) 
     {
         lastAggr = 0;
@@ -64,34 +63,19 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
     double alpha = 0.75;
     double smoothedIat = sock->m_baseIat * alpha + (1 - alpha) * sock->m_iat;
 
-    if (sock->m_iat <= prev)
-    {
-        cont++;
-        max = std::max(max, cont);
-    } else
-    {
-        cont = 0;
-    }
-    prev = smoothedIat * 3;
-
 
     *stream->GetStream() << Simulator::Now().GetSeconds() 
-        // << ' ' << delay 
-        // << ' ' << lastDelay 
-        // << ' ' << sock->m_iat * 1000
-        // << ' ' << sock->m_baseIat * 1000
-        // << ' ' << smoothedIat * 1000
-        // << ' ' << max
-        // << ' ' << cont
-        // << ' ' << sock->GetTimeRatio()
-        // << ' ' << sock->GetDelayTimeout().GetSeconds()
-        // << ' ' << lastAggr
-        << ' ' << aggrSeq
-        << ' ' << sock->m_delAckCount 
-        // << ' ' << sock->m_aggregationEst
-        // << ' ' << sock->DelayWindow()
-        // << ' ' << sock->GetDelayTimeout().GetSeconds()
-        // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() 
+        // << ' ' << delay // Travel time of packet
+        // << ' ' << sock->m_iat * 1000 // IAT (ms)
+        // << ' ' << sock->m_baseIat * 1000 // Min Iat (ms)
+        // << ' ' << sock->GetTimeRatio() // theta for delayed window algo
+        // << ' ' << sock->GetDelayTimeout().GetSeconds() // timeout before firing ack (s)
+        // << ' ' << lastAggr // ID of last aggregation packet head
+        << ' ' << aggrSeq // index of packet in aggregation
+        << ' ' << sock->m_delAckCount  // number of currently delayed acks
+        // << ' ' << sock->m_aggregationEst // not working right now (used for debug)
+        // << ' ' << sock->DelayWindow()  // maximum delay window
+        // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() // cwnd from sender
         << ' ' << std::endl;
     
     if (___aggregations[pckt->GetUid()] != lastAggr)
