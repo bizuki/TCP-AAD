@@ -3595,14 +3595,14 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     if (m_lastPacketTime != Time::Min())
     {
         m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
-        if (m_iat >= 1e-4)
+        if (m_iat >= 5e-5)
         {
             // std::cout << (Simulator::Now() - m_lastUpdate).GetSeconds() << std::endl;
-            if ((Simulator::Now() - m_lastUpdate).GetSeconds() > 0.3)
-            {
-                m_baseIat = INFINITY;
-                m_lastUpdate = Simulator::Now();
-            }
+            // if ((Simulator::Now() - m_lastUpdate).GetSeconds() > 1)
+            // {
+            //     m_baseIat = INFINITY;
+            //     m_lastUpdate = Simulator::Now();
+            // }
             m_baseIat = std::min(m_iat, m_baseIat);
 
             UpdateDelayWindow(GetTimeRatio());
@@ -4862,6 +4862,11 @@ TcpSocketBase::GetDelayTimeout() const
     NS_LOG_FUNCTION(this);
     if (m_dwndEnabled || m_dynamicTimeoutEnabled)
     {
+        if (m_delAckCount < m_delAckMaxCount)
+        {
+            return m_delAckTimeout;
+        }
+
         double smoothedIat = m_alpha * m_baseIat + (1 - m_alpha) * m_iat;
         // NS_LOG_DEBUG("Bruh " << std::min(m_lambda * smoothedIat, m_maxTimeout) << ' ' << smoothedIat);
         return Seconds(std::min(m_lambda * smoothedIat, m_maxTimeout));

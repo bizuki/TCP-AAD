@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os
 import pandas as pd
 import numpy as np
@@ -194,18 +195,7 @@ def collect_window_size_adapt(params) -> list[tuple[int, float]]:
     return throughputs
 
 
-def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> dict[tuple, list[tuple[float, float]]]:
-    match case:
-        case 'awnd':
-            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=False)
-        case 'cwnd':
-            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=True)
-        case 'no-limit':
-            case_specific = dict(dtime=True, dtimeLimit=False)
-        case 'default':
-            case_specific = dict(dtime=False)
-        case _:
-            raise ValueError(f'unknown {case=}')
+def run_once(dr, fortyHz, tcpNodes, udpNodes, recalc, rng_runs, case, params):
 
     def get_name():
         match case:
@@ -220,53 +210,76 @@ def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> dict[tuple
             case _:
                 raise ValueError(f'unknown {case=}')
 
+    res = 0
+    for seed in range(1, rng_runs + 1):
+        lambda_name = int(params['lambda'] * 100)
+            
+        algo_name = get_name()
+        params['rngSeed'] = seed
+        params['fortyHz'] = fortyHz
+        mobility = params['mobility']
+        path = f'./results/topology-aggregated.throughput.{algo_name}{lambda_name}.dr-{dr // tcpNodes}.rng-{seed}.tcp-{tcpNodes}.udp-{udpNodes}.fortyHz-{int(fortyHz)}.mobile-{int(mobility)}.delayed'
+
+        if not (os.path.exists(path) and len(open(path).readlines()) > 1) or recalc:
+            print(params)
+            os.system(f'./ns3 run "scratch/real-example/topology {_params_to_command_args(params)}"')
+        
+        line = next(filter(lambda s: s.startswith('average from all:'), open(path).readlines()))
+        res += float(line.removeprefix('average from all: '))
+    return res / rng_runs
+
+
+def collect_throughput_dack(recalc=False, case='awnd', rng_runs=1) -> dict[tuple, list[tuple[float, float]]]:
+    match case:
+        case 'awnd':
+            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=False)
+        case 'cwnd':
+            case_specific = dict(dtime=True, dtimeLimit=True, cwndEnabled=True)
+        case 'no-limit':
+            case_specific = dict(dtime=True, dtimeLimit=False)
+        case 'default':
+            case_specific = dict(dtime=False)
+        case _:
+            raise ValueError(f'unknown {case=}')
+
     res = {}
 
-    scenarios = [(1, 0)]#((1, 0), (2, 0), (3, 0), (4, 0), (1, 20), (4, 20))
+    scenarios = ((1, 0), (2, 0), (3, 0), (4, 0), (1, 15), (4, 15))
 
-    for dr in [15]:
-        for tcpNodes, udpNodes in scenarios:
-            params = dict(
-                simulationTime=20,
-                tcpNodes=tcpNodes,
-                dataRate=dr // tcpNodes,
-                udpNodes=udpNodes,
-                **case_specific
-            )
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=5) as executor:
+        for mobility in [False, True]:
+            for dr, fortyHz in [(15, False), (70, False), (70, True), (120, True)]:
+                for tcpNodes, udpNodes in scenarios:
+                    params = dict(
+                        simulationTime=20,
+                        tcpNodes=tcpNodes,
+                        dataRate=dr // tcpNodes,
+                        udpDataRate=4 if fortyHz else 2,
+                        udpNodes=udpNodes,
+                        mobility=mobility,
+                        **case_specific
+                    )
 
-            def run_once(params):
-                res = 0
-                for seed in range(1, rng_runs + 1):
-                    lambda_name = int(params['lambda'] * 100)
-                        
-                    algo_name = get_name()
-                    params['rngSeed'] = seed
+                    throughputs = []
+                    l, r = 100, 500
+                    step = 50
 
-                    path = f'./results/topology-aggregated.throughput.{algo_name}{lambda_name}.dr-{dr // tcpNodes}.rng-{seed}.tcp-{tcpNodes}.udp-{udpNodes}.delayed'
+                    for i in range(l, r + 1, step):
+                        print(f'calculating for lambda {i / 100}, {dr=}, {mobility=}, {fortyHz=}, {tcpNodes=}, {udpNodes=}')
+                        current_params = deepcopy(params)
+                        current_params.update({'lambda': i / 100})
+                        throughputs.append((i / 100, executor.submit(run_once, dr, fortyHz, tcpNodes, udpNodes, recalc, rng_runs, case, current_params)))
 
-                    if not (os.path.exists(path) and len(open(path).readlines()) > 1) or recalc:
-                        os.system(f'./ns3 run "scratch/real-example/topology {_params_to_command_args(params)}"')
-                    
-                    line = next(filter(lambda s: s.startswith('average from all:'), open(path).readlines()))
-                    res += float(line.removeprefix('average from all: '))
-                return res / rng_runs
+                        if case == 'default':
+                            throughputs = [(lam / 100, throughputs[-1][1]) for lam in range(l, r + 1, step)]
+                            break
 
-            throughputs = []
-            l, r = 100, 500
-            step = 50
+                    res[(dr, mobility, fortyHz, tcpNodes, udpNodes)] = throughputs
 
-            for i in range(l, r + 1, step):
-                print(f'calculating for lambda {i / 100}, {dr=}, {tcpNodes=}, {udpNodes=}')
-                params.update({'lambda': i / 100})
-                throughputs.append((i / 100, run_once(params)))
+        res = {k: list(map(lambda item: (item[0], item[1].result()), v)) for k, v in res.items()}
 
-                if case == 'default':
-                    throughputs = [(lam / 100, throughputs[-1][1]) for lam in range(l, r + 1, step)]
-                    break
-
-            res[(dr, tcpNodes, udpNodes)] = throughputs
-            
-    return res
+        return res
 
 
 def _params_to_command_args(params: dict):

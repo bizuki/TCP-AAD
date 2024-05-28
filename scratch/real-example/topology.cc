@@ -11,6 +11,7 @@
 #include "ns3/on-off-helper.h"
 #include "ns3/packet-sink-helper.h"
 #include "ns3/packet-sink.h"
+#include "ns3/rectangle.h"
 #include "ns3/ssid.h"
 #include "ns3/string.h"
 #include "ns3/tcp-westwood-plus.h"
@@ -60,9 +61,17 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
     }
     // auto delay = (Simulator::Now() - MilliSeconds((header.GetOption(TcpOption::TS)->GetObject<TcpOptionTS>())->GetTimestamp())).GetMilliSeconds();
 
-    double alpha = 0.75;
-    double smoothedIat = sock->m_baseIat * alpha + (1 - alpha) * sock->m_iat;
+    // double alpha = 0.75;
+    // double smoothedIat = sock->m_baseIat * alpha + (1 - alpha) * sock->m_iat;
 
+    if (___aggregations[pckt->GetUid()] != lastAggr)
+    {
+        lastAggr = ___aggregations[pckt->GetUid()];
+        aggrSeq = 0;
+    } else
+    {
+        aggrSeq++;
+    }
 
     *stream->GetStream() << Simulator::Now().GetSeconds() 
         // << ' ' << delay // Travel time of packet
@@ -78,14 +87,6 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
         // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() // cwnd from sender
         << ' ' << std::endl;
     
-    if (___aggregations[pckt->GetUid()] != lastAggr)
-    {
-        lastAggr = ___aggregations[pckt->GetUid()];
-        aggrSeq = 0;
-    } else
-    {
-        aggrSeq++;
-    }
 }
 
 void RxDrop(std::string context, Ptr<const Packet> pckt)
@@ -118,7 +119,8 @@ main(int argc, char* argv[])
 
     uint32_t payloadSize = 1472;                        /* Transport layer payload size in bytes. */
     size_t dataRate = 26;                               /* Application layer datarate. */
-    std::string tcpVariant{"TcpLinuxReno"};                 /* TCP variant type. */
+    size_t udpDataRate = 10;
+    std::string tcpVariant{"TcpLinuxReno"};             /* TCP variant type. */
     size_t tcpNodes = 1;                                /* Number of TCP nodes */
     size_t udpNodes = 0;                                /* Number of udp nodes. */
     std::string phyRate = "HtMcs7";                     /* Physical layer bitrate. */
@@ -130,6 +132,8 @@ main(int argc, char* argv[])
     bool dtime = false;
     bool dtimeLimit = false;
     bool cwndEnabled = false;
+    bool fortyHz = false;
+    bool mobility = false;
     size_t lLost = 0;
     size_t ampdu = 65535;
     size_t amsdu = 0;
@@ -161,6 +165,9 @@ main(int argc, char* argv[])
     cmd.AddValue("dtimeLimit", "Dynamic timeout with upper limit on delayed acks", dtimeLimit);
     cmd.AddValue("lambda", "Lambda", lambda);
     cmd.AddValue("rngSeed", "rng seed", rngSeed);
+    cmd.AddValue("fortyHz", "Whether to use 40Hz", fortyHz);
+    cmd.AddValue("udpDataRate", "udpDataRate", udpDataRate);
+    cmd.AddValue("mobility", "Whether to use mobility of just static positions", mobility);
     
     cmd.Parse(argc, argv);
 
@@ -209,11 +216,23 @@ main(int argc, char* argv[])
     YansWifiPhyHelper wifiPhy;
     wifiPhy.SetChannel(wifiChannel.Create());
     wifiPhy.SetErrorRateModel("ns3::YansErrorRateModel");
-    wifiHelper.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                       "DataMode",
-                                       StringValue(phyRate),
-                                       "ControlMode",
-                                       StringValue("HtMcs0"));
+    if (fortyHz)
+    {
+        wifiPhy.Set("ChannelSettings", StringValue("{0, 40, BAND_5GHZ, 0}"));
+    }
+
+    if (!mobility)
+    {
+        wifiHelper.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                        "DataMode",
+                                        StringValue(phyRate),
+                                        "ControlMode",
+                                        StringValue("HtMcs0"));
+    }
+    else
+    {
+        wifiHelper.SetRemoteStationManager("ns3::MinstrelHtWifiManager");
+    }
 
     /* Create nodes */
     NodeContainer networkNodes;
@@ -293,7 +312,7 @@ main(int argc, char* argv[])
     }
 
     /* Mobility model */
-    MobilityHelper mobility;
+    MobilityHelper mobilityHelper;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
     for (size_t i = 0; i < nodes; i++) 
@@ -302,10 +321,21 @@ main(int argc, char* argv[])
         positionAlloc->Add(Vector(sin(angle) * distanceToAP, cos(angle) * distanceToAP, 0.0));
     }
 
-    mobility.SetPositionAllocator(positionAlloc);
-    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    mobility.Install(g2Node);
-    mobility.Install(staNodes);
+    mobilityHelper.SetPositionAllocator(positionAlloc);
+    if (mobility)
+    {
+        mobilityHelper.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
+                              "Bounds",
+                              RectangleValue(Rectangle(-70, 70, -70, 70)),
+                              "Distance",
+                              DoubleValue(10));
+    }
+    else
+    {
+        mobilityHelper.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    }
+    mobilityHelper.Install(g2Node);
+    mobilityHelper.Install(staNodes);
 
     /* Internet stack */
     InternetStackHelper stack;
@@ -342,6 +372,8 @@ main(int argc, char* argv[])
         + ".rng-" + std::to_string(rngSeed) 
         + ".tcp-" + std::to_string(tcpNodes) 
         + ".udp-" + std::to_string(udpNodes)
+        + ".fortyHz-" + std::to_string(fortyHz)
+        + ".mobile-" + std::to_string(mobility) 
         + ".delayed";
 
     Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("results/topology.throughput." + dackString);
@@ -375,14 +407,18 @@ main(int argc, char* argv[])
     ApplicationContainer udpApps; 
     for (size_t i = 0; i < udpNodes; i++) 
     {
-        UdpEchoServerHelper server(8);
-        udpApps.Add(server.Install(sinkNodes.Get(i + tcpNodes)));
+        /* Install TCP Receiver on the access point */
+        PacketSinkHelper sinkHelper("ns3::UdpSocketFactory",
+                                    InetSocketAddress(Ipv4Address::GetAny(), 9));
+        sinkApps.Add(sinkHelper.Install(sinkNodes.Get(i + tcpNodes)));
 
-        UdpEchoClientHelper client(sinkInterfaces.GetAddress(i + tcpNodes), 8);
-        client.SetAttribute("MaxPackets", UintegerValue(0));
-        client.SetAttribute("Interval", TimeValue(MicroSeconds(100)));
-        client.SetAttribute("PacketSize", UintegerValue(payloadSize));
-        serverApps.Add(server.Install(serverNodes.Get(i + tcpNodes)));
+         /* Install TCP Transmitter on the station */
+        OnOffHelper server("ns3::UdpSocketFactory", (InetSocketAddress(sinkInterfaces.GetAddress(i + tcpNodes), 9)));
+        server.SetAttribute("PacketSize", UintegerValue(payloadSize));
+        server.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+        server.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+        server.SetAttribute("DataRate", DataRateValue(DataRate(std::to_string(udpDataRate) + "Mbps")));
+        udpApps.Add(server.Install(serverNodes.Get(i + tcpNodes)));
     }
     udpApps.Start(Seconds(0.0));
 
@@ -411,7 +447,7 @@ main(int argc, char* argv[])
     double sum = 0;
     for (size_t i = 0; i < tcpNodes; i++) 
     {
-        double averageThroughput = ((StaticCast<PacketSink>(sinkApps.Get(i))->GetTotalRx() * 8) / (1e6 * simulationTime * dataRate));
+        double averageThroughput = ((StaticCast<PacketSink>(sinkApps.Get(i))->GetTotalRx() * 8) / (1e6 * simulationTime));
         sum += averageThroughput;
         *aggregatedStream->GetStream() << "average: " << i << '\t' << averageThroughput << '\n';
     }

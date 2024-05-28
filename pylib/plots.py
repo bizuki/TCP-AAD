@@ -171,7 +171,7 @@ def create_throughput_plot(stats: dict[str, dict[tuple, list[tuple[float, float]
     suites = list(stats.values())[0]
 
     for suite in suites:
-        dr, tcp, udp = suite
+        dr, mobility, fortyHz, tcp, udp = suite
         fig = plt.figure()
         current_stats = {name: stat[suite] for name, stat in stats.items()}
 
@@ -184,12 +184,12 @@ def create_throughput_plot(stats: dict[str, dict[tuple, list[tuple[float, float]
         new_plt.set_ylabel('Average throughput (%)')
         new_plt.set_xlabel('Lambda param')
 
-        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Tcp nodes = {tcp}, Udp nodes = {udp}')
+        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Channel width = {40 if fortyHz else 20} Hz, Tcp nodes = {tcp}, Udp nodes = {udp}, Mobility = {mobility}', loc='center', wrap=True)
         new_plt.legend()
 
 
         _create_dir('./plots')
-        fig.savefig(f'./plots/throughput_{dr=}_{tcp=}_{udp=}.png')
+        fig.savefig(f'./plots/throughput_{dr=}_{fortyHz=}_{tcp=}_{udp=}_{mobility=}.png')
 
 
 def _create_dir(path: str):
