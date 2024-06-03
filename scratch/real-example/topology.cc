@@ -33,6 +33,9 @@ NS_LOG_COMPONENT_DEFINE("real-example");
 
 using namespace ns3;
 
+double avgDelay = 0;
+double delayCnt = 0;
+
 /**
  * Calculate the throughput
  */
@@ -64,6 +67,20 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
     // double alpha = 0.75;
     // double smoothedIat = sock->m_baseIat * alpha + (1 - alpha) * sock->m_iat;
 
+    *stream->GetStream() << Simulator::Now().GetSeconds() 
+        // << ' ' << delay // Travel time of packet
+        << ' ' << sock->m_iat * 1000 // IAT (ms)
+        // << ' ' << sock->m_baseIat * 1000 // Min Iat (ms)
+        // << ' ' << sock->GetTimeRatio() // theta for delayed window algo
+        // << ' ' << sock->GetDelayTimeout().GetSeconds() // timeout before firing ack (s)
+        // << ' ' << lastAggr // ID of last aggregation packet head
+        << ' ' << aggrSeq // index of packet in aggregation
+        // << ' ' << sock->m_delAckCount  // number of currently delayed acks
+        // << ' ' << sock->m_aggregationEst // not working right now (used for debug)
+        // << ' ' << sock->DelayWindow()  // maximum delay window
+        // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() // cwnd from sender
+        << ' ' << std::endl;
+
     if (___aggregations[pckt->GetUid()] != lastAggr)
     {
         lastAggr = ___aggregations[pckt->GetUid()];
@@ -72,21 +89,16 @@ RxOther(Ptr<OutputStreamWrapper> stream, std::string context, Ptr<const Packet> 
     {
         aggrSeq++;
     }
-
-    *stream->GetStream() << Simulator::Now().GetSeconds() 
-        // << ' ' << delay // Travel time of packet
-        // << ' ' << sock->m_iat * 1000 // IAT (ms)
-        // << ' ' << sock->m_baseIat * 1000 // Min Iat (ms)
-        // << ' ' << sock->GetTimeRatio() // theta for delayed window algo
-        // << ' ' << sock->GetDelayTimeout().GetSeconds() // timeout before firing ack (s)
-        // << ' ' << lastAggr // ID of last aggregation packet head
-        << ' ' << aggrSeq // index of packet in aggregation
-        << ' ' << sock->m_delAckCount  // number of currently delayed acks
-        // << ' ' << sock->m_aggregationEst // not working right now (used for debug)
-        // << ' ' << sock->DelayWindow()  // maximum delay window
-        // << ' ' << (header.GetOption(TcpOption::CWND)->GetObject<TcpOptionCwnd>())->GetCongestionWindow() / sock->GetSegSize() // cwnd from sender
-        << ' ' << std::endl;
     
+}
+
+void
+CalculateDelay(std::string context, Ptr<const Packet> pckt, const TcpHeader& header, Ptr<const TcpSocketBase> sock)
+{
+    if (!header.HasOption(TcpOption::TS)) return;
+    auto delay = (Simulator::Now() - MilliSeconds((header.GetOption(TcpOption::TS)->GetObject<TcpOptionTS>())->GetTimestamp())).GetMilliSeconds();
+    avgDelay += delay;
+    delayCnt++;
 }
 
 void RxDrop(std::string context, Ptr<const Packet> pckt)
@@ -139,6 +151,7 @@ main(int argc, char* argv[])
     size_t amsdu = 0;
     double lambda = 1.5;
     size_t rngSeed = 1;
+    size_t tx = 16;
 
     /* Command line argument parser setup. */
     CommandLine cmd(__FILE__);
@@ -151,7 +164,7 @@ main(int argc, char* argv[])
                 tcpVariant);
     cmd.AddValue("tcpNodes", "Number of nodes", tcpNodes);
     cmd.AddValue("udpNodes", "Number of udp nodes", udpNodes);
-    cmd.AddValue("distanceToAP", "Distance to AP", distanceToAP);
+    cmd.AddValue("distance", "Distance to AP", distanceToAP);
     cmd.AddValue("phyRate", "Physical layer bitrate", phyRate);
     cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
     cmd.AddValue("errorRate", "Error rate on wired link", errorRate);
@@ -168,6 +181,7 @@ main(int argc, char* argv[])
     cmd.AddValue("fortyHz", "Whether to use 40Hz", fortyHz);
     cmd.AddValue("udpDataRate", "udpDataRate", udpDataRate);
     cmd.AddValue("mobility", "Whether to use mobility of just static positions", mobility);
+    cmd.AddValue("tx", "Tx on wireless nodes", tx);
     
     cmd.Parse(argc, argv);
 
@@ -216,6 +230,8 @@ main(int argc, char* argv[])
     YansWifiPhyHelper wifiPhy;
     wifiPhy.SetChannel(wifiChannel.Create());
     wifiPhy.SetErrorRateModel("ns3::YansErrorRateModel");
+    wifiPhy.Set("TxPowerStart", DoubleValue(tx));
+    wifiPhy.Set("TxPowerEnd", DoubleValue(tx));
     if (fortyHz)
     {
         wifiPhy.Set("ChannelSettings", StringValue("{0, 40, BAND_5GHZ, 0}"));
@@ -373,7 +389,10 @@ main(int argc, char* argv[])
         + ".tcp-" + std::to_string(tcpNodes) 
         + ".udp-" + std::to_string(udpNodes)
         + ".fortyHz-" + std::to_string(fortyHz)
-        + ".mobile-" + std::to_string(mobility) 
+        + ".mobile-" + std::to_string(mobility)
+        + ".distance-" + std::to_string((size_t) distanceToAP)
+        + ".tx-" + std::to_string(tx)
+        + (uplink ? "" : ".downlink")
         + ".delayed";
 
     Ptr<OutputStreamWrapper> stream = asciiTraceHelper.CreateFileStream("results/topology.throughput." + dackString);
@@ -430,7 +449,7 @@ main(int argc, char* argv[])
     auto connect = [nodes, tcpNodes, &staNodes, streamCwnd]() {
         auto recieve_path = "/NodeList/" + std::to_string(2) + "/$ns3::TcpL4Protocol/SocketList/*/Rx";
         Config::Connect(recieve_path, MakeBoundCallback(&RxOther, streamCwnd));
-        Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd", MakeCallback(&RxDrop));
+        Config::Connect("/NodeList/2/$ns3::TcpL4Protocol/SocketList/*/Rx", MakeCallback(&CalculateDelay));
 
         // recieve_path = "/NodeList/" + std::to_string(2) + "/$ns3::TcpL4Protocol/SocketList/*/DelAckCount";
         // Config::Connect(recieve_path,
@@ -452,9 +471,8 @@ main(int argc, char* argv[])
         *aggregatedStream->GetStream() << "average: " << i << '\t' << averageThroughput << '\n';
     }
 
-    *aggregatedStream->GetStream() << "average from all: " << sum / tcpNodes << '\n';
-    std::cout << "average from all: " << sum / tcpNodes << '\n';
-
+    *aggregatedStream->GetStream() << "average from all: " << sum / tcpNodes << ' ' << avgDelay / delayCnt << '\n';
+    std::cout << "average from all: " << sum / tcpNodes << ' ' << avgDelay / delayCnt << '\n';
     Simulator::Destroy();
     return 0;
 }

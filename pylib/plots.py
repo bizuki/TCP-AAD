@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from itertools import count
 import os
 
 from .configuration import SuiteConfig, Model
@@ -138,58 +139,110 @@ def create_delay_plot(file: str):
 def create_cmp_plot(file: str):
     lines = open(file, 'r').readlines()
 
-    ts, currently_delayed, true_aggregation = zip(*map(lambda line: tuple(map(float, line.split())), lines))
+    ts, iat, true_aggregation = zip(*map(lambda line: tuple(map(float, line.split())), lines))
     
-    df =pd.DataFrame(
+    df = pd.DataFrame(
         data={
             'ts': ts,
-            'currently_delayed': currently_delayed,
+            'iat': iat,
             'true_aggregation': true_aggregation
             # 'delay': delay,
             # 'smoothed_delay': smoothed_delay,
             # 'iat': iat,
             # 'cwnd': cwnd
-            
         }
     )
 
     fig = plt.figure()
     new_plt = fig.add_subplot()
-
     
-    df.plot(x='ts', y='currently_delayed', ax=new_plt)
-    df.plot(x='ts', y='true_aggregation', ax=new_plt)
+    new_plt.plot(ts, iat, label='_', c='k')
+    
+    changes = list(filter(lambda x: x[1] > x[2], zip(ts, true_aggregation, true_aggregation[1:])))
 
-    new_plt.set_xbound(4, 4.3)
-    new_plt.set_title('Lambda = 1.5')
+    for last, next, i in zip(changes, changes[1:], count()):
+        if i % 2 == 0:
+            plt.axvspan(last[0], next[0], facecolor='0.2', alpha=0.3)
+        
+    new_plt.set_xbound(7.30, 7.38)
+    new_plt.set_ybound(0, 1)
+    new_plt.set_title('IAT during aggregation')
+    new_plt.set_ylabel('IAT (ms)')
+    new_plt.set_xlabel('Timestamp (s)')
 
-    fig.savefig(f'./cmp_15_1.5_lambda.png')
+    fig.savefig(f'./figs/iat_aggregation.png')
     
         
 def create_throughput_plot(stats: dict[str, dict[tuple, list[tuple[float, float]]]]):
-
-    suites = list(stats.values())[0]
+    suites = list(stats.values())[0][0]
 
     for suite in suites:
-        dr, mobility, fortyHz, tcp, udp = suite
+        dr, mobility, fortyHz, tcp, udp, _, _, uplink = suite
         fig = plt.figure()
-        current_stats = {name: stat[suite] for name, stat in stats.items()}
+        current_stats = {name: stat[0][suite] for name, stat in stats.items()}
 
         new_plt = fig.add_subplot()
 
         for name, stat in current_stats.items():
-
+            stat = list(map(lambda x: (x[0], x[1][0]), stat))
             new_plt.plot(*zip(*stat), label=name)
 
-        new_plt.set_ylabel('Average throughput (%)')
-        new_plt.set_xlabel('Lambda param')
+        new_plt.set_ylabel('Average throughput (Mbps)')
+        new_plt.set_xlabel('Beta param')
 
-        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Channel width = {40 if fortyHz else 20} Hz, Tcp nodes = {tcp}, Udp nodes = {udp}, Mobility = {mobility}', loc='center', wrap=True)
+        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Channel width = {40 if fortyHz else 20} Hz, Tcp nodes = {tcp}, Udp nodes = {udp}, Mobility = {mobility}, uplink={not uplink}', loc='center', wrap=True)
+        new_plt.get_yaxis().get_major_formatter().set_useOffset(False)
         new_plt.legend()
 
 
-        _create_dir('./plots')
-        fig.savefig(f'./plots/throughput_{dr=}_{fortyHz=}_{tcp=}_{udp=}_{mobility=}.png')
+        _create_dir('./plots_throughput')
+        fig.savefig(f'./plots_throughput/throughput_{dr=}_{fortyHz=}_{tcp=}_{udp=}_{mobility=}_{uplink=}.png')
+
+    for suite in suites:
+        dr, mobility, fortyHz, tcp, udp, _, _, uplink = suite
+        fig = plt.figure()
+        current_stats = {name: stat[0][suite] for name, stat in stats.items()}
+
+        new_plt = fig.add_subplot()
+
+
+        for name, stat in current_stats.items():
+            stat = list(map(lambda x: (x[0], x[1][1]), stat))
+            new_plt.plot(*zip(*stat), label=name)
+
+        new_plt.set_ylabel('Average End-to-End delay')
+        new_plt.set_xlabel('Beta param')
+
+        new_plt.set_title(f'Data rate = {dr}Mbps, Channel width = {40 if fortyHz else 20} Hz, Tcp nodes = {tcp}, Udp nodes = {udp}, Mobility = {mobility}, Uplink = {not uplink}', loc='center', wrap=True)
+        new_plt.legend()
+
+        _create_dir('./plots_delay')
+        fig.savefig(f'./plots_delay/delay_{dr=}_{fortyHz=}_{tcp=}_{udp=}_{mobility=}_{uplink=}.png')
+
+
+    suites = list(stats.values())[0][1]
+    
+    for suite in suites:
+        dr, mobility, fortyHz, tcp, udp, tx, distance, uplink = suite
+        fig = plt.figure()
+        current_stats = {name: stat[1][suite] for name, stat in stats.items()}
+
+        new_plt = fig.add_subplot()
+
+        for name, stat in current_stats.items():
+            stat = list(map(lambda x: (x[0], x[1][0]), stat))
+            new_plt.plot(*zip(*stat), label=name)
+
+        new_plt.set_ylabel('Average throughput (Mbps)')
+        new_plt.set_xlabel('Beta param')
+
+        new_plt.set_title(f'Throughput at data rate = {dr}Mbps, Channel width = {40 if fortyHz else 20} Hz, Tx={tx}, distance={distance}', loc='center', wrap=True)
+        new_plt.get_yaxis().get_major_formatter().set_useOffset(False)
+        new_plt.legend()
+
+
+        _create_dir('./plots_tx')
+        fig.savefig(f'./plots_tx/throughput_{tx=}_{distance=}.png')
 
 
 def _create_dir(path: str):
