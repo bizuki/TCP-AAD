@@ -1300,22 +1300,22 @@ class TcpSocketBase : public TcpSocket
     SequenceNumber32 GetHighRxAck() const;
 
   public:
-    // dwnd related
-    double m_lambda{3};
+    // Delay schemas related
     double m_alpha{0.75};
-    double m_maxTimeout{0.5};
+    double m_iatThreshold{5e-5};
     double m_baseIat{INFINITY};
     double m_iat{INFINITY};
     Time m_lastPacketTime{Time::Min()};
-    double m_dwnd{3};
-    bool m_dwndEnabled{false};
-    size_t m_aggregationEst{__UINT32_MAX__};
-    size_t aggregationSize{0};
     Time m_lastUpdate{Time::FromInteger(0, Time::S)};
 
-    // window
-    bool m_dynamicTimeoutEnabled{false};
-    bool m_dynamicTimeoutLimitEnabled{false};
+    // TCP-AAD related
+    double m_beta{3};
+    bool m_aadEnabled{false};
+
+    // TCP-ADW related
+    double m_lambda{3};
+    double m_dwnd{3};
+    bool m_adwEnabled{false};
 
     // Counters and events
     EventId m_retxEvent{};     //!< Retransmission event

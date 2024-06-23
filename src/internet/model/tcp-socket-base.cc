@@ -177,35 +177,35 @@ TcpSocketBase::GetTypeId()
                                           "On",
                                           TcpSocketState::AcceptOnly,
                                           "AcceptOnly"))
-            .AddAttribute("Lambda",
+            .AddAttribute("IatThreshold",
+                          "All considered IAT values must be higher than this threshold",
+                          DoubleValue(5e-5),
+                          MakeDoubleAccessor(&TcpSocketBase::m_iatThreshold),
+                          MakeDoubleChecker<double>(0))
+            .AddAttribute("Alpha",
+                          "Alpha parameter from ADW and AAD (used in smoothing function)",
+                          DoubleValue(0.75),
+                          MakeDoubleAccessor(&TcpSocketBase::m_alpha),
+                          MakeDoubleChecker<double>(0, 1))
+            .AddAttribute("AadBeta",
+                          "Lambda parameter from AAD algo ",
+                          DoubleValue(3),
+                          MakeDoubleAccessor(&TcpSocketBase::m_beta),
+                          MakeDoubleChecker<double>(0))
+            .AddAttribute("AdwLambda",
                           "Lambda parameter from ADW algo ",
                           DoubleValue(3),
                           MakeDoubleAccessor(&TcpSocketBase::m_lambda),
                           MakeDoubleChecker<double>(0))
-            .AddAttribute("Alpha",
-                          "Alpha parameter from ADW algo (used in smoothing function)",
-                          DoubleValue(0.75),
-                          MakeDoubleAccessor(&TcpSocketBase::m_alpha),
-                          MakeDoubleChecker<double>(0, 1))
-            .AddAttribute("Timeout",
-                          "Maximum timout of delayed ACK",
-                          DoubleValue(0.1),
-                          MakeDoubleAccessor(&TcpSocketBase::m_maxTimeout),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("DynamicDelayWindow",
-                          "Enable dynamic delay window",
+            .AddAttribute("AdaptiveDelayWindow",
+                          "Enable adaptive delay window",
                           BooleanValue(false),
-                          MakeBooleanAccessor(&TcpSocketBase::m_dwndEnabled),
+                          MakeBooleanAccessor(&TcpSocketBase::m_adwEnabled),
                           MakeBooleanChecker())
-            .AddAttribute("DynamicTimeout",
-                          "Enable dynamic timeout",
+            .AddAttribute("AggregationAwareDelay",
+                          "Enable Aggregation-Aware Delay Acking (TCP-AAD)",
                           BooleanValue(false),
-                          MakeBooleanAccessor(&TcpSocketBase::m_dynamicTimeoutEnabled),
-                          MakeBooleanChecker())
-            .AddAttribute("DynamicTimeoutLimit",
-                          "Enable limit on amount of delayed acks for dynamic timeout",
-                          BooleanValue(false),
-                          MakeBooleanAccessor(&TcpSocketBase::m_dynamicTimeoutLimitEnabled),
+                          MakeBooleanAccessor(&TcpSocketBase::m_aadEnabled),
                           MakeBooleanChecker())
             .AddTraceSource("RTO",
                             "Retransmission timeout",
@@ -367,11 +367,12 @@ TcpSocketBase::TcpSocketBase()
 TcpSocketBase::TcpSocketBase(const TcpSocketBase& sock)
     : TcpSocket(sock),
       // copy object::m_tid and socket::callbacks
-      m_lambda(sock.m_lambda),
       m_alpha(sock.m_alpha),
-      m_dwndEnabled(sock.m_dwndEnabled),
-      m_dynamicTimeoutEnabled(sock.m_dynamicTimeoutEnabled),
-      m_dynamicTimeoutLimitEnabled(sock.m_dynamicTimeoutLimitEnabled),
+      m_iatThreshold(sock.m_iatThreshold),
+      m_beta(sock.m_beta),
+      m_aadEnabled(sock.m_aadEnabled),
+      m_lambda(sock.m_lambda),
+      m_adwEnabled(sock.m_adwEnabled),
       m_dupAckCount(sock.m_dupAckCount),
       m_delAckCount(0),
       m_delAckMaxCount(sock.m_delAckMaxCount),
@@ -3592,25 +3593,30 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     NS_LOG_DEBUG("Data segment, seq=" << tcpHeader.GetSequenceNumber()
                                       << " pkt size=" << p->GetSize());
 
-    if (m_lastPacketTime != Time::Min())
+    if (m_lastPacketTime == Time::Min())
+    // can't calculate iat for first packet -> init delay window
     {
-        m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
-        if (m_iat >= 5e-5)
-        {
-            // std::cout << (Simulator::Now() - m_lastUpdate).GetSeconds() << std::endl;
-            // if ((Simulator::Now() - m_lastUpdate).GetSeconds() > 1)
-            // {
-            //     m_baseIat = INFINITY;
-            //     m_lastUpdate = Simulator::Now();
-            // }
-            m_baseIat = std::min(m_iat, m_baseIat);
-
-            UpdateDelayWindow(GetTimeRatio());
-        }
+        m_dwnd = m_lambda * GetSegSize();
     }
     else
     {
-        m_dwnd = m_lambda * GetSegSize();
+        m_iat = (Simulator::Now() - m_lastPacketTime).GetSeconds();
+        // skip too small IATs
+        if (m_iat >= m_iatThreshold)
+        {
+            // reset baseIat only in case of TCP-AAD, every one second
+            if (m_aadEnabled && (Simulator::Now() - m_lastUpdate).GetSeconds() > 1)
+            {
+                m_baseIat = INFINITY;
+                m_lastUpdate = Simulator::Now();
+            }
+            m_baseIat = std::min(m_iat, m_baseIat);
+            UpdateDelayWindow(GetTimeRatio());
+        }
+        else
+        {
+            NS_LOG_DEBUG("Got very small IAT = " << m_iat << ", skipping it");
+        }
     }
     m_lastPacketTime = Simulator::Now();
 
@@ -3651,6 +3657,15 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
             return;
         }
     }
+
+    auto issueTimout = [&](){
+        m_delAckEvent =
+            Simulator::Schedule(GetDelayTimeout(), &TcpSocketBase::DelAckTimeout, this);
+        NS_LOG_LOGIC(
+            this << " scheduled delayed ACK at "
+                << (Simulator::Now() + Simulator::GetDelayLeft(m_delAckEvent)).GetSeconds());
+    };
+
     // Now send a new ACK packet acknowledging all received and delivered data
     if (m_tcb->m_rxBuffer->Size() > m_tcb->m_rxBuffer->Available() ||
         m_tcb->m_rxBuffer->NextRxSequence() > expectedSeq + p->GetSize())
@@ -3673,12 +3688,6 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     }
     else
     { // In-sequence packet: ACK if delayed ack count allows
-        aggregationSize++;
-        if (aggregationSize >= m_aggregationEst) 
-        {
-            m_aggregationEst = __UINT32_MAX__;
-        }
-        // std::cout << Simulator::Now().GetSeconds() << ' ' << m_iat << ' ' << m_baseIat << ' ' << GetDelayTimeout().GetSeconds() << std::endl;
         if (++m_delAckCount >= DelayWindow())
         {
             m_delAckEvent.Cancel();
@@ -3701,24 +3710,17 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
         else if (!m_delAckEvent.IsExpired())
         {
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-            if (m_dwndEnabled || m_dynamicTimeoutEnabled)
+            // cancel previous timer and issue a new one
+            if (m_adwEnabled || m_aadEnabled)
             {
                 m_delAckEvent.Cancel();
-                m_delAckEvent =
-                    Simulator::Schedule(GetDelayTimeout(), &TcpSocketBase::DelAckTimeout, this);
-                NS_LOG_LOGIC(
-                    this << " scheduled delayed ACK at "
-                        << (Simulator::Now() + Simulator::GetDelayLeft(m_delAckEvent)).GetSeconds());
+                issueTimout();
             }
         }
         else if (m_delAckEvent.IsExpired())
         {
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-            m_delAckEvent =
-                Simulator::Schedule(GetDelayTimeout(), &TcpSocketBase::DelAckTimeout, this);
-            NS_LOG_LOGIC(
-                this << " scheduled delayed ACK at "
-                     << (Simulator::Now() + Simulator::GetDelayLeft(m_delAckEvent)).GetSeconds());
+            issueTimout();
         }
     }
 }
@@ -3961,12 +3963,7 @@ TcpSocketBase::ReTxTimeout()
 
 void
 TcpSocketBase::DelAckTimeout()
-{
-    // std::cout << m_delAckCount << ' ' << 123 << std::endl;
-    m_delAckCount = 0;
-    m_aggregationEst = aggregationSize;
-    aggregationSize = 0;
-    
+{    
     NS_LOG_DEBUG("AckTimeout");
     m_dwnd = std::max(m_lambda * GetSegSize(), m_dwnd - (1 - GetTimeRatio()));
 
@@ -4840,7 +4837,7 @@ double
 TcpSocketBase::UpdateDelayWindow(double theta)
 {
     NS_LOG_FUNCTION(this << theta);
-    double R = std::min(m_tcb->m_rcvCwndValue, static_cast<uint32_t>(AdvertisedWindowSize() - GetSegSize() * 2));
+    double R = std::min(m_tcb->m_rcvCwndValue, static_cast<uint32_t>(AdvertisedWindowSize(false)));
     
     if (m_cwndDiff > 0) 
     {
@@ -4860,42 +4857,37 @@ Time
 TcpSocketBase::GetDelayTimeout() const
 {
     NS_LOG_FUNCTION(this);
-    if (m_dwndEnabled || m_dynamicTimeoutEnabled)
+    // use default timeout
+    if (!m_adwEnabled && !m_aadEnabled)
     {
-        if (m_delAckCount < m_delAckMaxCount)
-        {
-            return m_delAckTimeout;
-        }
-
-        double smoothedIat = m_alpha * m_baseIat + (1 - m_alpha) * m_iat;
-        // NS_LOG_DEBUG("Bruh " << std::min(m_lambda * smoothedIat, m_maxTimeout) << ' ' << smoothedIat);
-        return Seconds(std::min(m_lambda * smoothedIat, m_maxTimeout));
+        return m_delAckTimeout;
     }
 
-    return m_delAckTimeout;
+    // use default algorithm for first `m_delAckMaxCount` packets
+    if (m_delAckCount < m_delAckMaxCount && m_aadEnabled)
+    {
+        return m_delAckTimeout;
+    }
+
+    double smoothedIat = m_alpha * m_baseIat + (1 - m_alpha) * m_iat;
+
+    auto parameter = m_adwEnabled ? m_lambda : m_beta;
+    return std::min(Seconds(parameter * smoothedIat), m_delAckTimeout);
 }
 
 double
 TcpSocketBase::DelayWindow() const
 {
     NS_LOG_FUNCTION(this);
-    if (m_dwndEnabled)
+    if (m_adwEnabled)
     {
         return (m_dwnd / GetSegSize());
     }
 
-    if (m_dynamicTimeoutEnabled && m_dynamicTimeoutLimitEnabled)
+    // amount of packets is limited by timeout
+    if (m_aadEnabled)
     {
-        return (
-            m_congestionWindowEnabled ? m_tcb->m_rcvCwndValue 
-                                      : AdvertisedWindowSize(true)
-        ) / GetSegSize();
-    }
-
-    if (m_dynamicTimeoutEnabled)
-    {
-        // std::cout << m_aggregationEst << std::endl;
-        return INFINITY;//::max((uint32_t) m_aggregationEst / 2, m_delAckMaxCount);//m_aggregationEst / 3;
+        return INFINITY;
     }
 
     return m_delAckMaxCount;
