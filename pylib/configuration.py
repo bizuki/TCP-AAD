@@ -1,35 +1,114 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator, computed_field, ConfigDict
+from itertools import product
+from functools import reduce
 from enum import Enum
 
-class Model(Enum):
-    CUBIC = 'TcpCubic'
-    VENO = 'TcpVeno'
-    NEW_RENO = 'TcpNewReno'
-    WESTWOOD_PLUS = 'TcpWestwoodPlus'
-    YEAH = 'TcpYeah'
-    BBR = 'TcpBbr'
-    CERL = 'TcpCerl'
-    CERL_PLUS = 'TcpCerlPlus'
-    CERL_PLUS_X = 'TcpCerlX'
+class Case(Enum):
+    AAD = 'AAD'
+    ADW = 'ADW'
+    DEFAULT = 'default'
+    
+    @property
+    def specific_params(self):
+        match self:
+            case Case.AAD:
+                return dict(tcpAad=True, cwndEnabled=False)
+            case Case.ADW:
+                return {'lambda': 3, **dict(tcpAdw=True, cwndEnabled=True)}
+            case 'default':
+                 return dict(tcpAad=False, tcpAdw=False)
+            case _:
+                raise ValueError(f'unknown {self=}')
+            
+    @property
+    def algo_name(self):
+        match self:
+            case Case.AAD:
+                return 'tcpAad'
+            case Case.ADW:
+                return 'tcpAdw'
+            case Case.DEFAULT:
+                return 'default'
+            case _:
+                raise ValueError(f'unknown {self=}')
+        
+            
 
-    @staticmethod
-    def interesting():
-        return [Model.CERL_PLUS, Model.CERL_PLUS_X]
+def is_iterable(obj):
+    return isinstance(obj, list) and not isinstance(obj, str)
+
+
+class Suite(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tcpVariant: str
+    simulationTime: int
+    tcpNodes: int
+    targetDataRate: int
+    udpNodes: int
+    mobility: bool
+    tx: int
+    distance: int
+    uplink: bool
+    fortyHz: bool
+
+    beta: int = 300
+
+    case: Case
+    rng_runs: int
+
+    @computed_field
+    @property
+    def udpDataRate(self) -> int:
+        return 4 if self.fortyHz else 2
+    
+    @computed_field
+    @property
+    def dataRate(self) -> int:
+        return self.targetDataRate // self.tcpNodes
+    
+    def dump_params(self):
+        return {'beta': self.beta / 100, **self.model_dump(exclude={'case', 'rng_runs', 'targetDataRate', 'beta'}, exclude_none=True), **self.case.specific_params}
+
+    def get_params(self):
+        return {'beta': self.beta / 100, **self.model_dump(exclude={'rng_runs', 'dataRate', 'beta', 'udpDataRate'}, exclude_none=True)}
 
 
 class SuiteConfig(BaseModel):
     name: str
-    loss_rate_dist: bool = False
-    loss_rate_error: bool = False
-    loss_rate_congestion: bool = False
-    window_size: bool = False
-    window_size_adapt: bool = False
 
-    models: list[Model]
+    tcpVariant: list[str]
+    simulationTime: list[int]
+    tcpNodes: list[int]
+    targetDataRate: list[int]
+    udpNodes: list[int]
+    mobility: list[bool]
+    tx: list[int]
+    distance: list[int]
+    uplink: list[bool]
+    fortyHz: list[bool]
+    beta: list[int]
 
-    @property
-    def models_string(self):
-        return ','.join([mdl.value for mdl in self.models])
+    rng_runs: int
+
+    def varying_params(self):
+        return [k for k, v in self.model_dump().items() if isinstance(v, list) and len(v) > 1]
+
+    @model_validator(mode='before')
+    @classmethod
+    def validate_all_fields_at_the_same_time(cls, field_values):
+        return {k: v if is_iterable(v) or k in ('rng_runs', 'name') else [v] for k, v in field_values.items()}
     
-    def to_params(self):
-        return dict(tcpVariants=self.models_string)
+    def get_all_experiments(self, case: Case) -> list[Suite]:
+        excluded_fields = ['rng_runs', 'name']
+        # specific only to AAD
+        if case is not Case.AAD:
+            excluded_fields += ['beta']
+
+        return [
+            Suite(**reduce(lambda dict, new_dict: {**dict, **new_dict}, params, dict(case=case, rng_runs=self.rng_runs)))
+            for params in product(*[
+                list(map(lambda i: {field: i}, value)) for field, value in self.model_dump(exclude=excluded_fields).items()
+            ])
+        ]
+

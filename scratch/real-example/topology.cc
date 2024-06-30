@@ -349,8 +349,10 @@ main(int argc, char* argv[])
 
     auto tcpType = (tcpAdw ? "tcpAdw" : (tcpAad ? "tcpAad" : "default"));
 
+    auto mainParam = (tcpAad ? beta : lambda);
+
     std::string tcpAdwString 
-        = tcpType + std::to_string((size_t)(lambda * 100)) 
+        = tcpType + std::to_string((size_t)(mainParam * 100)) 
         + ".dr-" + std::to_string(dataRate) 
         + ".rng-" + std::to_string(rngSeed) 
         + ".tcp-" + std::to_string(tcpNodes) 
@@ -367,9 +369,9 @@ main(int argc, char* argv[])
     Ptr<OutputStreamWrapper> streamCwnd = asciiTraceHelper.CreateFileStream("results/topology.cwnd." + tcpAdwString);
     Ptr<OutputStreamWrapper> aggregatedStream = asciiTraceHelper.CreateFileStream("results/topology-aggregated.throughput." + tcpAdwString);
 
-    Ipv4InterfaceContainer& sinkInterfaces = uplink ? staInterfaces : appInterfaces;
-    NodeContainer& serverNodes = uplink ? appNodes : staNodes;
-    NodeContainer& sinkNodes = uplink ? staNodes : appNodes;
+    Ipv4InterfaceContainer& sinkInterfaces = uplink ? appInterfaces : staInterfaces;
+    NodeContainer& serverNodes = uplink ? staNodes : appNodes;
+    NodeContainer& sinkNodes = uplink ? appNodes : staNodes;
 
     for (size_t i = 0; i < tcpNodes; i++) 
     {
