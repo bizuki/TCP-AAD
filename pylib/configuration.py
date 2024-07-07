@@ -1,4 +1,6 @@
 from pydantic import BaseModel, model_validator, computed_field, ConfigDict
+from dataclasses import dataclass, asdict
+from pandas import DataFrame
 from itertools import product
 from functools import reduce
 from enum import Enum
@@ -15,7 +17,7 @@ class Case(Enum):
                 return dict(tcpAad=True, cwndEnabled=False)
             case Case.ADW:
                 return {'lambda': 3, **dict(tcpAdw=True, cwndEnabled=True)}
-            case 'default':
+            case Case.DEFAULT:
                  return dict(tcpAad=False, tcpAdw=False)
             case _:
                 raise ValueError(f'unknown {self=}')
@@ -31,6 +33,12 @@ class Case(Enum):
                 return 'default'
             case _:
                 raise ValueError(f'unknown {self=}')
+            
+
+    def __lt__(self, other):
+        if isinstance(other, Case):
+            return self.value < other.value
+        raise TypeError('bruh')
         
             
 
@@ -112,3 +120,23 @@ class SuiteConfig(BaseModel):
             ])
         ]
 
+
+class DetailedStats(BaseModel):
+    ts: float
+    delay: float
+    iat: float  # ms
+    base_iat: float  # ms
+    theta: float  # TCP-ADW 
+    current_timeout: float # ms
+    aggregation_id: int
+    aggregation_position: int
+    delayed_ack: int  # number of delayed acks
+    delay_window: float
+    sender_cwnd: float
+
+    @property
+    def dataframe(self):
+        return DataFrame(
+            data=self.model_dump(),
+            index=['ts']
+        )
